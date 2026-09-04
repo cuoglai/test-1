@@ -1,0 +1,165 @@
+import React, { useMemo } from 'react';
+import { Booking } from '../../types';
+import { parseDateString, formatDateString } from '../../utils/formatters';
+import { BookingCard } from '../booking/BookingCard';
+import { findCTVConflicts } from '../../services/conflictService';
+import { useTheme } from '../../contexts/ThemeContext';
+
+interface WeekViewProps {
+  currentDate: string;
+  allBookings: Booking[];
+  onSelectDate: (date: string) => void;
+  onSelectBooking: (booking: Booking) => void;
+  onOpenAddBooking: () => void;
+  onScroll?: (e: React.UIEvent<HTMLDivElement>) => void;
+}
+
+export const WeekView: React.FC<WeekViewProps> = ({
+  currentDate,
+  allBookings,
+  onSelectDate,
+  onSelectBooking,
+  onOpenAddBooking,
+  onScroll
+}) => {
+  const { isDark, accentConfig } = useTheme();
+
+  // Compute the 7 days of the week containing currentDate (Monday to Sunday)
+  const weekDays = useMemo(() => {
+    const current = parseDateString(currentDate);
+    const dayOfWeek = current.getDay(); // 0 is Sunday, 1 is Monday...
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+
+    const monday = new Date(current);
+    monday.setDate(current.getDate() + diffToMonday);
+
+    const days = [];
+    const dayLabels = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
+
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      const dateStr = formatDateString(d);
+      const count = allBookings.filter((b) => b.date === dateStr && b.status !== 'cancelled').length;
+
+      days.push({
+        dateStr,
+        dayNum: d.getDate(),
+        label: dayLabels[i],
+        isCurrent: dateStr === currentDate,
+        hasBookings: count > 0,
+        count
+      });
+    }
+    return days;
+  }, [currentDate, allBookings]);
+
+  // Bookings on currently selected day in this week
+  const dayBookings = useMemo(() => {
+    return allBookings
+      .filter((b) => b.date === currentDate)
+      .sort((a, b) => a.startTime.localeCompare(b.startTime));
+  }, [allBookings, currentDate]);
+
+  const stripBg = isDark ? 'bg-[#1C1C1E] border-[#2C2C2E]' : 'bg-white border-[#E5E5EA]';
+  const textPrimary = isDark ? 'text-white' : 'text-[#1C1C1E]';
+  const textSecondary = isDark ? 'text-[#8E8E93]' : 'text-[#8E8E93]';
+  const dayHoverBg = isDark ? 'hover:bg-[#2C2C2E]' : 'hover:bg-[#F2F2F7]';
+
+  return (
+    <div id="week-view-container" className="flex-1 flex flex-col overflow-hidden">
+      {/* 7-day horizontal strip selector */}
+      <div className={`${stripBg} border-b px-3 py-2.5 flex justify-between gap-1 shrink-0 overflow-x-auto`}>
+        {weekDays.map((day) => (
+          <button
+            key={day.dateStr}
+            id={`week-day-btn-${day.dateStr}`}
+            type="button"
+            onClick={() => onSelectDate(day.dateStr)}
+            style={day.isCurrent ? { backgroundColor: accentConfig.hex, color: '#FFFFFF' } : undefined}
+            className={`flex-1 min-w-[42px] py-1.5 rounded-xl flex flex-col items-center transition-all cursor-pointer ${
+              day.isCurrent
+                ? 'shadow-xs'
+                : `${dayHoverBg} ${textPrimary}`
+            }`}
+          >
+            <span
+              className={`text-[10px] font-bold uppercase tracking-wider ${
+                day.isCurrent ? 'text-white/90' : textSecondary
+              }`}
+            >
+              {day.label}
+            </span>
+            <span className="text-[15px] font-extrabold mt-0.5">{day.dayNum}</span>
+            {day.hasBookings && (
+              <span
+                className="w-1.5 h-1.5 rounded-full mt-1"
+                style={{ backgroundColor: day.isCurrent ? '#FFFFFF' : accentConfig.hex }}
+              />
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Hourly Timeline of selected day */}
+      <div
+        onScroll={onScroll}
+        className="flex-1 overflow-y-auto p-4"
+        style={{ WebkitOverflowScrolling: 'touch' }}
+      >
+        <div className="min-h-[calc(100%+85px)] space-y-3 pb-24">
+          <div className="flex items-center justify-between px-1">
+            <span className={`text-[11px] font-bold uppercase tracking-widest ${textSecondary}`}>
+              TIMELINE THEO GIỜ · {dayBookings.length} LỊCH
+            </span>
+            <button
+              type="button"
+              onClick={onOpenAddBooking}
+              style={{ color: accentConfig.hex }}
+              className="text-[12px] font-bold hover:underline cursor-pointer"
+            >
+              + Thêm lịch
+            </button>
+          </div>
+
+          {dayBookings.length === 0 ? (
+            <div className="py-12 text-center">
+              <p className={`text-[14px] ${textSecondary}`}>Không có lịch makeup trong ngày này</p>
+              <button
+                type="button"
+                onClick={onOpenAddBooking}
+                style={{ backgroundColor: accentConfig.hex }}
+                className="mt-3 px-4 py-2 rounded-xl text-white text-[13px] font-bold shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer"
+              >
+                + Tạo booking mới
+              </button>
+            </div>
+          ) : (
+            <div className={`space-y-3 relative before:absolute before:left-7 before:top-2 before:bottom-2 before:w-[2px] ${isDark ? 'before:bg-[#2C2C2E]' : 'before:bg-[#E5E5EA]'}`}>
+              {dayBookings.map((booking) => {
+                const conflicts = findCTVConflicts(allBookings, {
+                  id: booking.id,
+                  date: booking.date,
+                  startTime: booking.startTime,
+                  endTime: booking.endTime,
+                  performerType: booking.performerType,
+                  ctvId: booking.ctvId
+                });
+
+                return (
+                  <div key={booking.id} className="relative z-10">
+                    <BookingCard
+                      booking={booking}
+                      hasConflict={conflicts.length > 0}
+                      onSelect={onSelectBooking}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
