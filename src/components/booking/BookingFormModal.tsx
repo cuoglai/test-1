@@ -1,29 +1,37 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Booking, CTV, MakeupPackage, ReminderOption, PerformerType } from '../../types';
+import { Booking, CTV, MakeupPackage, BookingStatus } from '../../types';
 import { findCTVConflicts } from '../../services/conflictService';
 import {
   getBookingDisplayTitle,
   getBookingMakeupInfo,
   calculateEndTimeFromDuration,
   formatDateString,
-  timeToMinutes
+  timeToMinutes,
+  extractVietnamesePhoneNumber,
+  parseBookingTemplate,
+  getBookingGuestCount,
+  ALL_BOOKING_STATUSES
 } from '../../utils/formatters';
 import { IOSWheelTimePicker } from './IOSWheelTimePicker';
+import { InlineDatePicker } from './InlineDatePicker';
 import { useTheme } from '../../contexts/ThemeContext';
 import {
   X,
   Calendar,
   Clock,
   Sparkles,
-  Bell,
   FileText,
   Check,
   AlertTriangle,
   ChevronDown,
   ChevronUp,
-  Timer
+  Timer,
+  Minus,
+  Plus,
+  Clipboard,
+  User,
+  Users
 } from 'lucide-react';
-
 interface BookingFormModalProps {
   isOpen: boolean;
   initialDate?: string;
@@ -34,22 +42,6 @@ interface BookingFormModalProps {
   onClose: () => void;
   onSave: (booking: Booking) => void;
 }
-
-const REMINDER_CHOICES: { value: ReminderOption; label: string }[] = [
-  { value: '15_mins', label: '15 phút' },
-  { value: '30_mins', label: '30 phút' },
-  { value: '1_hour', label: '1 giờ' },
-  { value: '2_hours', label: '2 giờ' },
-  { value: '1_day', label: '1 ngày' }
-];
-
-// Exact duration choices requested: 45 phút, 2 giờ (default), 4 giờ, 6 giờ
-const DURATION_OPTIONS = [
-  { label: '45 phút', minutes: 45 },
-  { label: '2 giờ', minutes: 120, isDefault: true },
-  { label: '4 giờ', minutes: 240 },
-  { label: '6 giờ', minutes: 360 }
-];
 
 export const BookingFormModal: React.FC<BookingFormModalProps> = ({
   isOpen,
@@ -62,7 +54,8 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
 }) => {
   const { isDark, accentConfig } = useTheme();
 
-  // 1. Thông tin lịch make (ô note lớn, tự do nhiều dòng, tự động mở rộng chiều cao)
+  // 1. Thông tin lịch make: Tách dòng đầu tiên là Tên khách hàng, ở dưới là Thông tin chi tiết
+  const [customerName, setCustomerName] = useState('');
   const [makeupInfo, setMakeupInfo] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -73,13 +66,14 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
     el.style.height = 'auto';
     // Calculate border difference
     const borderAdjustment = el.offsetHeight - el.clientHeight;
-    // Auto expand without any max-height cap or scrollbar
-    const newHeight = Math.max(el.scrollHeight + borderAdjustment, 90);
+    // Mặc định chiều cao tương đương ~4 dòng chữ (khoảng 110px)
+    const newHeight = Math.max(el.scrollHeight + borderAdjustment, 110);
     el.style.height = `${newHeight}px`;
   }, []);
 
   // 2. Ngày
   const [date, setDate] = useState('');
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
 
   // 3. Giờ bắt đầu (24h format e.g. "10:30")
   const [startTime, setStartTime] = useState('10:30');
@@ -87,13 +81,65 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
 
   // 4. Thời lượng ca (mặc định: 120 phút = 2 giờ)
   const [durationMinutes, setDurationMinutes] = useState(120);
+  const [isEditingDurationManual, setIsEditingDurationManual] = useState(false);
+  const [manualDurationText, setManualDurationText] = useState('');
+  const durationInputRef = useRef<HTMLInputElement>(null);
 
-  // 6. Người make: Tôi / CTV
-  const [performerType, setPerformerType] = useState<PerformerType>('owner');
+  // Xử lý nhập tay thời lượng khi bấm vào ô ở giữa
+  const startManualDurationEdit = () => {
+    const currentHours = durationMinutes / 60;
+    setManualDurationText(
+      Number.isInteger(currentHours)
+        ? `${currentHours}`
+        : `${currentHours.toString().replace('.', ',')}`
+    );
+    setIsEditingDurationManual(true);
+    setTimeout(() => {
+      durationInputRef.current?.focus();
+      durationInputRef.current?.select();
+    }, 50);
+  };
+
+  const handleSaveManualDuration = () => {
+    setIsEditingDurationManual(false);
+    const raw = manualDurationText.trim().toLowerCase();
+    if (!raw) return;
+
+    let mins = 0;
+    if (raw.includes('p') || raw.includes('ph') || raw.includes('m')) {
+      const parsed = parseInt(raw.replace(/\D/g, ''), 10);
+      if (!isNaN(parsed) && parsed > 0) mins = parsed;
+    } else if (raw.includes('h')) {
+      const hMatch = raw.match(/(\d+(?:[.,]\d+)?)\s*h\s*(\d+)?/);
+      if (hMatch) {
+        const h = parseFloat(hMatch[1].replace(',', '.'));
+        const m = hMatch[2] ? parseInt(hMatch[2], 10) : 0;
+        mins = Math.round(h * 60 + m);
+      }
+    } else {
+      const num = parseFloat(raw.replace(',', '.'));
+      if (!isNaN(num) && num > 0) {
+        if (num <= 12) {
+          mins = Math.round(num * 60);
+        } else {
+          mins = Math.round(num);
+        }
+      }
+    }
+
+    if (mins >= 15 && mins <= 1440) {
+      setDurationMinutes(mins);
+    }
+  };
+
+  // 5. Số lượng khách (mặc định: 1 khách)
+  const [guestCount, setGuestCount] = useState<number>(1);
+
+  // 6. CTV thực hiện (bắt buộc)
   const [ctvId, setCtvId] = useState('');
 
-  // 7. Thông báo trước (mặc định 30 phút)
-  const [reminder, setReminder] = useState<ReminderOption>('30_mins');
+  // 7. Trạng thái lịch hẹn
+  const [status, setStatus] = useState<BookingStatus>('assigned');
 
   // 8. Ghi chú thêm
   const [note, setNote] = useState('');
@@ -101,10 +147,113 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
   // Validation
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
 
+  // Tự động nhận diện số điện thoại (hỗ trợ cả các số bị phân tách thành cụm 3-4 số)
+  const detectedPhone = useMemo(() => extractVietnamesePhoneNumber(makeupInfo), [makeupInfo]);
+
+  const handleMakeupInfoChange = (val: string) => {
+    setMakeupInfo(val);
+    if (errors.makeupInfo) setErrors((prev) => ({ ...prev, makeupInfo: '' }));
+    if (errors.customerName && (customerName.trim() || val.trim())) {
+      setErrors((prev) => ({ ...prev, customerName: '' }));
+    }
+    adjustTextareaHeight();
+
+    // Tự động nhận diện thời gian, ngày & tên nếu người dùng dán theo mẫu
+    if (!editBooking) {
+      const parsed = parseBookingTemplate(val);
+      if (parsed.time) {
+        setStartTime(parsed.time);
+      }
+      if (parsed.date) {
+        setDate(parsed.date);
+      }
+      if (parsed.name && !customerName.trim()) {
+        setCustomerName(parsed.name);
+      }
+      if (parsed.quantity) {
+        setGuestCount(parsed.quantity);
+      }
+    }
+  };
+
+  /**
+   * Nút 'Dán' thông minh:
+   * Lấy nội dung từ bộ nhớ tạm qua navigator.clipboard.readText()
+   * Logic dán nối tiếp thông minh:
+   * - Nếu ô nhập đang trống (hoặc con trỏ đang ở đầu dòng/dòng trống): Dán trực tiếp nội dung vào, không thêm khoảng trắng hay dòng thừa.
+   * - Nếu ô nhập đã có chữ và chưa xuống dòng: Tự động chèn thêm một dấu xuống dòng (\n) rồi mới dán tiếp nội dung vừa copy vào.
+   */
+  const handleSmartPaste = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.readText) {
+        alert('Trình duyệt chưa hỗ trợ tự động đọc bộ nhớ tạm. Bạn có thể nhấn giữ vào ô nhập để Dán.');
+        return;
+      }
+
+      const clipboardText = await navigator.clipboard.readText();
+      if (!clipboardText) return;
+
+      const textarea = textareaRef.current;
+      let nextValue = '';
+      let newCursorPos = 0;
+
+      const isFocused = textarea && document.activeElement === textarea;
+      const currentVal = makeupInfo;
+
+      if (!currentVal || currentVal.trim() === '') {
+        // Ô nhập đang trống -> Dán trực tiếp nội dung vào, không thêm khoảng trắng hay dòng thừa
+        nextValue = clipboardText.trim();
+        newCursorPos = nextValue.length;
+      } else if (isFocused && textarea) {
+        const start = textarea.selectionStart ?? currentVal.length;
+        const end = textarea.selectionEnd ?? currentVal.length;
+        const before = currentVal.substring(0, start);
+        const after = currentVal.substring(end);
+
+        // Kiểm tra con trỏ có đang ở đầu dòng hoặc dòng trống
+        const isAtLineStart = start === 0 || before.endsWith('\n');
+
+        if (isAtLineStart) {
+          nextValue = before + clipboardText.trim() + after;
+          newCursorPos = before.length + clipboardText.trim().length;
+        } else {
+          // Ô nhập đã có chữ và chưa xuống dòng -> tự động chèn thêm \n
+          nextValue = before + '\n' + clipboardText.trim() + after;
+          newCursorPos = before.length + 1 + clipboardText.trim().length;
+        }
+      } else {
+        // Textarea không focus (thao tác bấm nút trực tiếp trên điện thoại hoặc desktop)
+        if (currentVal.endsWith('\n')) {
+          nextValue = currentVal + clipboardText.trim();
+        } else {
+          nextValue = currentVal + '\n' + clipboardText.trim();
+        }
+        newCursorPos = nextValue.length;
+      }
+
+      handleMakeupInfoChange(nextValue);
+
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+          adjustTextareaHeight();
+        }
+      }, 30);
+    } catch (err: any) {
+      console.warn('Lỗi khi đọc clipboard:', err);
+      alert('Không thể đọc bộ nhớ tạm. Bạn có thể nhấn giữ vào ô để Dán.');
+    }
+  };
+
   useEffect(() => {
     if (!isOpen) return;
 
     if (editBooking) {
+      setCustomerName(editBooking.customerName || getBookingDisplayTitle(editBooking) || '');
       setMakeupInfo(editBooking.makeupInfo ?? getBookingMakeupInfo(editBooking));
       setDate(editBooking.date);
       const start = editBooking.startTime || '10:30';
@@ -120,19 +269,20 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
         setDurationMinutes(120);
       }
 
-      setPerformerType(editBooking.performerType || 'owner');
+      setGuestCount(getBookingGuestCount(editBooking));
       setCtvId(editBooking.ctvId || ctvs[0]?.id || '');
-      setReminder(editBooking.reminder || '30_mins');
+      setStatus(editBooking.status || 'assigned');
       setNote(editBooking.note || '');
     } else {
+      setCustomerName('');
       setMakeupInfo('');
       const todayStr = initialDate || formatDateString(new Date());
       setDate(todayStr);
       setStartTime('10:30');
       setDurationMinutes(120); // Default 2 hours
-      setPerformerType('owner');
+      setGuestCount(1);
       setCtvId(ctvs[0]?.id || '');
-      setReminder('30_mins');
+      setStatus('assigned');
       setNote('');
     }
     setIsWheelPickerOpen(false);
@@ -167,7 +317,6 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
     date,
     startTime,
     endTime: endCalculation.endTime,
-    performerType,
     ctvId
   });
 
@@ -200,8 +349,11 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
     if (e) e.preventDefault();
     const newErrors: { [key: string]: string } = {};
 
-    if (!makeupInfo.trim()) {
-      newErrors.makeupInfo = 'Vui lòng nhập thông tin khách / lịch make.';
+    const trimmedName = customerName.trim();
+    const trimmedInfo = makeupInfo.trim();
+
+    if (!trimmedName && !trimmedInfo) {
+      newErrors.customerName = 'Vui lòng nhập tên khách hàng.';
     }
     if (!date) {
       newErrors.date = 'Vui lòng chọn ngày makeup.';
@@ -209,7 +361,7 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
     if (!startTime) {
       newErrors.startTime = 'Vui lòng chọn giờ bắt đầu.';
     }
-    if (performerType === 'ctv' && !ctvId && ctvs.length > 0) {
+    if (!ctvId && ctvs.length > 0) {
       newErrors.ctvId = 'Vui lòng chọn CTV thực hiện.';
     }
 
@@ -218,9 +370,17 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
       return;
     }
 
-    const displayTitle = getBookingDisplayTitle({ makeupInfo } as any);
-    const phoneMatch = makeupInfo.match(/(?:0|\+84)[3|5|7|8|9][0-9]{8}\b/);
-    const customerPhone = phoneMatch ? phoneMatch[0] : editBooking?.customerPhone || '';
+    const displayTitle = getBookingDisplayTitle({ makeupInfo: trimmedInfo } as any);
+    const parsedTemplate = parseBookingTemplate(trimmedInfo);
+    const resolvedCustomerName =
+      trimmedName ||
+      parsedTemplate.name ||
+      displayTitle ||
+      editBooking?.customerName ||
+      'Khách makeup';
+
+    const customerPhone = parsedTemplate.phone || extractVietnamesePhoneNumber(trimmedInfo) || editBooking?.customerPhone || '';
+    const customerAddress = parsedTemplate.address || editBooking?.customerAddress || '';
 
     const bookingData: Booking = {
       id: editBooking?.id || 'b-' + Date.now().toString(36),
@@ -230,27 +390,28 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
       startTime,
       endTime: endCalculation.endTime,
 
-      makeupInfo: makeupInfo.trim(),
-      customerName: displayTitle || editBooking?.customerName || 'Khách makeup',
+      makeupInfo: trimmedInfo,
+      customerName: resolvedCustomerName,
       customerPhone,
-      customerAddress: editBooking?.customerAddress || '',
-      quantity: editBooking?.quantity || 1,
+      customerAddress,
+      quantity: guestCount,
+      guestCount,
 
       packageId: editBooking?.packageId || '',
       packageNameSnapshot: editBooking?.packageNameSnapshot || 'Makeup',
+      price: 0,
       packagePrice: 0,
       deposit: 0,
       surcharge: 0,
       totalAmount: 0,
       remainingAmount: 0,
 
-      performerType,
-      ctvId: performerType === 'ctv' ? (ctvId || selectedCTV?.id) : undefined,
-      ctvNameSnapshot: performerType === 'ctv' ? (selectedCTV?.name || 'CTV') : undefined,
+      performerType: 'ctv',
+      ctvId: ctvId || selectedCTV?.id || '',
+      ctvNameSnapshot: selectedCTV?.name || editBooking?.ctvNameSnapshot || 'CTV',
 
-      reminder,
       note: note.trim(),
-      status: editBooking?.status || (performerType === 'ctv' ? 'assigned' : 'deposited'),
+      status,
 
       createdAt: editBooking?.createdAt || Date.now(),
       updatedAt: Date.now()
@@ -279,11 +440,19 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
     >
       <div
         id="booking-form-sheet"
-        className={`${sheetBg} w-full sm:max-w-lg rounded-t-[28px] sm:rounded-3xl max-h-[94vh] flex flex-col shadow-2xl overflow-hidden border ${cardBorder}`}
+        style={{
+          maxHeight: 'calc(100% - max(env(safe-area-inset-top, 0px), 44px) - 12px)'
+        }}
+        className={`${sheetBg} w-full sm:max-w-lg rounded-t-[28px] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden border ${cardBorder}`}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* iOS Pull Indicator / Grabber Handle */}
+        <div className="w-full flex justify-center pt-2.5 pb-1 shrink-0">
+          <div className="w-9 h-1 rounded-full bg-[#8E8E93]/40" />
+        </div>
+
         {/* Header */}
-        <div className={`px-5 pt-4 pb-3 border-b ${cardBorder} flex justify-between items-center ${cardBg} shrink-0`}>
+        <div className={`px-5 pt-1 pb-3 border-b ${cardBorder} flex justify-between items-center ${cardBg} shrink-0`}>
           <div>
             <h2 className={`text-[17px] font-bold ${textPrimary}`}>
               {editBooking ? 'Chỉnh sửa lịch Makeup' : 'Tạo lịch mới'}
@@ -301,39 +470,84 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
         </div>
 
         {/* Form Body: Exact sequence requested by user */}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-4 py-4 space-y-3.5">
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-3.5 py-3 space-y-2.5">
 
           {/* ============================================================ */}
           {/* 1. THÔNG TIN LỊCH MAKE (Đưa lên đầu tiên ngay dưới tiêu đề)   */}
+          {/* Tách 1 dòng đầu tiên là tên khách hàng, ở dưới là chi tiết    */}
           {/* ============================================================ */}
-          <div className={`${cardBg} p-3.5 rounded-2xl border ${cardBorder} shadow-xs space-y-2`}>
+          <div className={`${cardBg} px-3.5 py-2.5 rounded-xl border ${cardBorder} shadow-xs space-y-2`}>
             <div className="flex justify-between items-center">
-              <label
-                htmlFor="booking-input-makeup-info"
-                className={`text-[13px] font-bold ${textSecondary} flex items-center gap-1.5`}
-              >
+              <label className={`text-[13px] font-bold ${textSecondary} flex items-center gap-1.5`}>
                 <FileText className="w-4 h-4" style={{ color: accentConfig.hex }} />
                 Thông tin lịch make <span className="text-[#FF3B30]">*</span>
               </label>
-              <span className={`text-[11px] ${textSecondary}`}>Tự do nhiều dòng</span>
             </div>
 
-            <textarea
-              ref={textareaRef}
-              id="booking-input-makeup-info"
-              rows={3}
-              value={makeupInfo}
-              onChange={(e) => {
-                setMakeupInfo(e.target.value);
-                if (errors.makeupInfo) setErrors((prev) => ({ ...prev, makeupInfo: '' }));
-                adjustTextareaHeight();
-              }}
-              placeholder="Nhập tên khách, SĐT, địa chỉ, số người, ghi chú...&#10;Ví dụ: Chị Lan – 0912345678 – Make tiệc cưới tại nhà"
-              className={`w-full p-3 rounded-xl ${inputBg} border border-transparent focus:outline-none text-[15px] ${textPrimary} leading-relaxed placeholder:${textSecondary}/60 min-h-[90px] resize-none overflow-hidden`}
-              style={{
-                borderColor: errors.makeupInfo ? '#FF3B30' : undefined
-              }}
-            />
+            {/* 2 ô nhập để gần nhau, chú thích nằm mờ ở trong ô tối ưu không gian */}
+            <div className="space-y-1.5">
+              {/* Dòng 1: Tên khách hàng (chú thích mờ trong ô) */}
+              <div>
+                <input
+                  id="booking-input-customer-name"
+                  type="text"
+                  value={customerName}
+                  onChange={(e) => {
+                    setCustomerName(e.target.value);
+                    if (errors.customerName) {
+                      setErrors((prev) => ({ ...prev, customerName: '' }));
+                    }
+                  }}
+                  placeholder="Tên khách hàng (ví dụ: Chị Lan, Cô dâu My...)"
+                  className={`w-full h-9 px-3 rounded-xl ${inputBg} border border-transparent focus:outline-none text-[13.5px] font-medium ${textPrimary} placeholder:${textSecondary} placeholder:text-[12.5px]`}
+                  style={{
+                    borderColor: errors.customerName ? '#FF3B30' : undefined
+                  }}
+                />
+                {errors.customerName && (
+                  <p className="text-[11px] text-[#FF3B30] font-medium mt-0.5">{errors.customerName}</p>
+                )}
+              </div>
+
+              {/* Dòng 2: Thông tin chi tiết (chú thích mờ trong ô, kèm nút Dán thông minh) */}
+              <div className="relative">
+                <textarea
+                  ref={textareaRef}
+                  id="booking-input-makeup-info"
+                  rows={3}
+                  value={makeupInfo}
+                  onChange={(e) => handleMakeupInfoChange(e.target.value)}
+                  placeholder="Thông tin chi tiết (địa chỉ, số lượng, phong cách, ghi chú...)"
+                  className={`w-full p-2.5 pb-8 rounded-xl ${inputBg} border border-transparent focus:outline-none text-[13.5px] ${textPrimary} leading-relaxed min-h-[85px] resize-none overflow-hidden placeholder:${textSecondary} placeholder:text-[12.5px]`}
+                  style={{
+                    borderColor: errors.makeupInfo ? '#FF3B30' : undefined
+                  }}
+                />
+                {/* Nút 'Dán' thông minh ở góc dưới bên phải bên trong khung nhập nội dung */}
+                <button
+                  type="button"
+                  id="btn-smart-paste-makeup-info"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={handleSmartPaste}
+                  title="Dán từ bộ nhớ tạm"
+                  className={`absolute right-2 bottom-2 h-6 px-2.5 rounded-md border text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer active:scale-95 z-10 select-none touch-manipulation ${
+                    isDark
+                      ? 'bg-[#3A3A3C] hover:bg-[#48484A] border-[#48484A] text-white'
+                      : 'bg-white hover:bg-[#F2F2F7] border-[#D1D1D6] text-[#1C1C1E]'
+                  }`}
+                >
+                  <Clipboard className="w-3 h-3" style={{ color: accentConfig.hex }} />
+                  <span>Dán</span>
+                </button>
+              </div>
+            </div>
+
+            {detectedPhone && (
+              <div className="flex items-center gap-1.5 text-[11px] text-[#34C759] font-semibold bg-[#34C759]/10 px-2 py-0.5 rounded-md w-fit">
+                <Check className="w-3 h-3 stroke-[2.5]" />
+                <span>Đã nhận diện SĐT: <strong className="font-mono">{detectedPhone}</strong></span>
+              </div>
+            )}
             {errors.makeupInfo && (
               <p className="text-[11px] text-[#FF3B30] font-medium">{errors.makeupInfo}</p>
             )}
@@ -342,84 +556,105 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
           {/* ============================================================ */}
           {/* 2 & 3. NGÀY VÀ GIỜ BẮT ĐẦU                                  */}
           {/* ============================================================ */}
-          <div className={`${cardBg} rounded-2xl border ${cardBorder} shadow-xs divide-y ${dividerCol} overflow-hidden`}>
+          <div className={`${cardBg} rounded-xl border ${cardBorder} shadow-xs divide-y ${dividerCol} overflow-hidden`}>
             
-            {/* Row 2: Ngày */}
-            <div className="flex items-center justify-between p-3.5 relative">
-              <div className="flex items-center gap-3">
-                <div
-                  className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-                  style={{ backgroundColor: accentConfig.lightBg, color: accentConfig.hex }}
-                >
-                  <Calendar className="w-4 h-4" />
-                </div>
-                <div>
-                  <span className={`text-[14px] font-bold ${textPrimary} block leading-tight`}>
-                    Ngày makeup
-                  </span>
-                  <span className="text-[13px] font-semibold" style={{ color: accentConfig.hex }}>
-                    {formattedDateLabel}
-                  </span>
-                </div>
-              </div>
-
-              {/* Quick shortcut chips */}
-              <div className="flex items-center gap-1.5 z-20">
-                <button
-                  type="button"
-                  onClick={() => setQuickDate(0)}
-                  className={`text-[11px] font-semibold px-2.5 h-7 rounded-lg ${inputBg} ${textPrimary} border ${cardBorder} active:scale-95 transition-all`}
-                >
-                  Hôm nay
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setQuickDate(1)}
-                  className={`text-[11px] font-semibold px-2.5 h-7 rounded-lg ${inputBg} ${textPrimary} border ${cardBorder} active:scale-95 transition-all`}
-                >
-                  Ngày mai
-                </button>
-              </div>
-
-              {/* Native Date Picker trigger overlay */}
-              <input
-                id="booking-input-date"
-                type="date"
-                value={date}
-                onChange={(e) => {
-                  setDate(e.target.value);
-                  if (errors.date) setErrors((prev) => ({ ...prev, date: '' }));
+            {/* Row 2: Ngày Makeup (Bấm mở Bảng chọn ngày) */}
+            <div className="px-3.5 py-2.5">
+              <div
+                id="btn-toggle-date-picker"
+                onClick={() => {
+                  setIsDatePickerOpen(!isDatePickerOpen);
+                  if (!isDatePickerOpen) setIsWheelPickerOpen(false);
                 }}
-                className="opacity-0 absolute inset-0 w-full h-full cursor-pointer z-10"
-                aria-label="Chọn ngày"
-              />
+                className="flex items-center justify-between cursor-pointer select-none"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                    style={{ backgroundColor: accentConfig.lightBg, color: accentConfig.hex }}
+                  >
+                    <Calendar className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className={`text-[13px] font-bold ${textPrimary} block leading-tight`}>
+                      Ngày makeup
+                    </span>
+                    <span className="text-[13px] font-semibold" style={{ color: accentConfig.hex }}>
+                      {formattedDateLabel}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  {/* Quick shortcut chips */}
+                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      onClick={() => setQuickDate(0)}
+                      className={`text-[10.5px] font-semibold px-2 h-6.5 rounded-md ${inputBg} ${textPrimary} border ${cardBorder} active:scale-95 transition-all`}
+                    >
+                      Hôm nay
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setQuickDate(1)}
+                      className={`text-[10.5px] font-semibold px-2 h-6.5 rounded-md ${inputBg} ${textPrimary} border ${cardBorder} active:scale-95 transition-all`}
+                    >
+                      Ngày mai
+                    </button>
+                  </div>
+
+                  {isDatePickerOpen ? (
+                    <ChevronUp className={`w-4 h-4 ${textSecondary}`} />
+                  ) : (
+                    <ChevronDown className={`w-4 h-4 ${textSecondary}`} />
+                  )}
+                </div>
+              </div>
+
+              {/* Bảng chọn ngày (Inline Date Picker trực quan) */}
+              {isDatePickerOpen && (
+                <div className="mt-2.5 pt-2.5 border-t border-dashed" style={{ borderColor: isDark ? '#2C2C2E' : '#E5E5EA' }}>
+                  <InlineDatePicker
+                    value={date}
+                    onChange={(newDate) => {
+                      setDate(newDate);
+                      if (errors.date) setErrors((prev) => ({ ...prev, date: '' }));
+                    }}
+                    onClose={() => setIsDatePickerOpen(false)}
+                  />
+                </div>
+              )}
             </div>
 
             {/* Row 3: Giờ bắt đầu (Bấm để mở Wheel Picker) */}
-            <div className="p-3.5">
+            <div className="px-3.5 py-2.5">
               <div
                 id="btn-toggle-time-picker"
-                onClick={() => setIsWheelPickerOpen(!isWheelPickerOpen)}
+                onClick={() => {
+                  setIsWheelPickerOpen(!isWheelPickerOpen);
+                  if (!isWheelPickerOpen) setIsDatePickerOpen(false);
+                }}
                 className="flex items-center justify-between cursor-pointer select-none"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2.5">
                   <div
-                    className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                    className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
                     style={{ backgroundColor: accentConfig.lightBg, color: accentConfig.hex }}
                   >
                     <Clock className="w-4 h-4" />
                   </div>
                   <div>
-                    <span className={`text-[14px] font-bold ${textPrimary} block leading-tight`}>
+                    <span className={`text-[13px] font-bold ${textPrimary} block leading-tight`}>
                       Giờ bắt đầu
                     </span>
-                    <span className={`text-[12px] ${textSecondary}`}>Định dạng 24 giờ</span>
+                    <span className={`text-[11px] ${textSecondary}`}>Định dạng 24 giờ</span>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2">
                   <span
-                    className="text-[20px] font-black tracking-tight px-3 py-1 rounded-xl font-mono"
+                    className="text-[18px] font-black tracking-tight px-2.5 py-0.5 rounded-lg font-mono"
                     style={{ backgroundColor: accentConfig.lightBg, color: accentConfig.hex }}
                   >
                     {startTime}
@@ -434,7 +669,7 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
 
               {/* iPhone Wheel Picker (Cố định, không lệch) */}
               {isWheelPickerOpen && (
-                <div className="mt-3 pt-3 border-t border-dashed" style={{ borderColor: isDark ? '#2C2C2E' : '#E5E5EA' }}>
+                <div className="mt-2.5 pt-2.5 border-t border-dashed" style={{ borderColor: isDark ? '#2C2C2E' : '#E5E5EA' }}>
                   <IOSWheelTimePicker
                     value={startTime}
                     onChange={(newTime) => {
@@ -451,182 +686,219 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
           {errors.startTime && <p className="text-[11px] text-[#FF3B30] font-medium px-1">{errors.startTime}</p>}
 
           {/* ============================================================ */}
-          {/* 4. THỜI LƯỢNG CA (45 phút, 2 giờ [mặc định], 4 giờ, 6 giờ)  */}
+          {/* 4. THỜI LƯỢNG CA VÀ GIỜ KẾT THÚC (Thu nhỏ 50%, các dòng sát nhau) */}
           {/* ============================================================ */}
-          <div className={`${cardBg} p-3.5 rounded-2xl border ${cardBorder} shadow-xs space-y-2.5`}>
+          <div className={`${cardBg} px-3 py-2 rounded-xl border ${cardBorder} shadow-xs space-y-1.5`}>
+            {/* Hàng trên: Nhãn thời lượng nhỏ gọn bên trái & Giờ kết thúc tự tính bên phải */}
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Timer className="w-4 h-4" style={{ color: accentConfig.hex }} />
-                <span className={`text-[13px] font-bold ${textSecondary}`}>
-                  Thời lượng ca
+              <div className="flex items-center gap-1.5 shrink-0">
+                <Timer className="w-3.5 h-3.5" style={{ color: accentConfig.hex }} />
+                <span className={`text-[11px] font-bold uppercase tracking-wider ${textSecondary}`}>
+                  Thời lượng
                 </span>
               </div>
-              <span
-                className="text-[12px] font-bold px-2.5 py-0.5 rounded-lg font-mono"
-                style={{ backgroundColor: accentConfig.lightBg, color: accentConfig.hex }}
-              >
-                {DURATION_OPTIONS.find((d) => d.minutes === durationMinutes)?.label || `${durationMinutes} phút`}
-              </span>
+
+              <div className="flex items-center gap-1.5 shrink-0 text-right">
+                <span className={`text-[11px] ${textSecondary}`}>Kết thúc:</span>
+                <span className="font-bold text-[#34C759] font-mono text-[12px] px-1.5 py-0.5 rounded-md bg-[#34C759]/10">
+                  {endCalculation.displayFormatted}
+                </span>
+                {endCalculation.isNextDay && (
+                  <span className="text-[9px] font-bold text-[#FF9500]">(+1 ngày)</span>
+                )}
+              </div>
             </div>
 
-            {/* 4 nút lựa chọn gọn và đồng nhất: 45 phút, 2 giờ, 4 giờ, 6 giờ */}
-            <div className="grid grid-cols-4 gap-2">
-              {DURATION_OPTIONS.map((opt) => {
-                const isSelected = durationMinutes === opt.minutes;
-                return (
-                  <button
-                    key={opt.minutes}
-                    type="button"
-                    onClick={() => setDurationMinutes(opt.minutes)}
-                    style={
-                      isSelected
-                        ? { backgroundColor: accentConfig.hex, color: '#FFFFFF' }
-                        : undefined
-                    }
-                    className={`h-11 rounded-xl text-[13px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
-                      isSelected
-                        ? 'shadow-xs scale-[1.02]'
-                        : `${inputBg} ${textPrimary} hover:opacity-80 active:scale-95 border ${cardBorder}`
-                    }`}
-                  >
-                    {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
-                    {opt.label}
-                  </button>
-                );
-              })}
+            {/* Hàng dưới: 3 nút [-] [ 2h (120p) ] [+] thu gọn 50% chiều cao, h-8 */}
+            <div className="grid grid-cols-3 gap-1.5 items-center">
+              {/* Nút Giảm -0.5h */}
+              <button
+                id="btn-duration-decrease"
+                type="button"
+                onClick={() => setDurationMinutes((prev) => Math.max(30, prev - 30))}
+                disabled={durationMinutes <= 30}
+                aria-label="Giảm 0.5 giờ"
+                className={`h-8 rounded-lg font-bold transition-all flex items-center justify-center cursor-pointer border ${cardBorder} ${inputBg} ${textPrimary} hover:opacity-80 active:scale-95 disabled:opacity-30 disabled:pointer-events-none shadow-2xs`}
+              >
+                <Minus className="w-4 h-4 stroke-[2.5]" />
+              </button>
+
+              {/* Ô số ở giữa: Bấm vào để nhập tay số giờ hoặc phút */}
+              {isEditingDurationManual ? (
+                <div
+                  style={{
+                    backgroundColor: accentConfig.lightBg,
+                    borderColor: accentConfig.hex
+                  }}
+                  className="h-8 rounded-lg border-2 flex items-center justify-center shadow-xs overflow-hidden px-1"
+                >
+                  <input
+                    ref={durationInputRef}
+                    type="text"
+                    inputMode="decimal"
+                    value={manualDurationText}
+                    onChange={(e) => setManualDurationText(e.target.value)}
+                    onBlur={handleSaveManualDuration}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSaveManualDuration();
+                      } else if (e.key === 'Escape') {
+                        setIsEditingDurationManual(false);
+                      }
+                    }}
+                    placeholder="2h"
+                    aria-label="Nhập tay thời lượng ca"
+                    className="w-full text-center font-mono font-black text-[14px] bg-transparent focus:outline-none"
+                    style={{ color: accentConfig.hex }}
+                  />
+                </div>
+              ) : (
+                <button
+                  id="display-duration-value"
+                  type="button"
+                  onClick={startManualDurationEdit}
+                  title="Bấm để nhập tay thời lượng"
+                  style={{
+                    backgroundColor: accentConfig.lightBg,
+                    borderColor: accentConfig.hex,
+                    color: accentConfig.hex
+                  }}
+                  className="h-8 rounded-lg border flex items-center justify-center gap-1 select-none shadow-2xs cursor-pointer hover:opacity-90 active:scale-98 transition-all px-1"
+                >
+                  <span className="text-[14px] font-black tracking-tight leading-none">
+                    {Number.isInteger(durationMinutes / 60)
+                      ? `${durationMinutes / 60}h`
+                      : `${(durationMinutes / 60).toString().replace('.', ',')}h`}
+                  </span>
+                  <span className="text-[10px] opacity-75 font-semibold leading-none">
+                    ({durationMinutes}p)
+                  </span>
+                </button>
+              )}
+
+              {/* Nút Tăng +0.5h */}
+              <button
+                id="btn-duration-increase"
+                type="button"
+                onClick={() => setDurationMinutes((prev) => Math.min(720, prev + 30))}
+                disabled={durationMinutes >= 720}
+                aria-label="Tăng 0.5 giờ"
+                className={`h-8 rounded-lg font-bold transition-all flex items-center justify-center cursor-pointer border ${cardBorder} ${inputBg} ${textPrimary} hover:opacity-80 active:scale-95 disabled:opacity-30 disabled:pointer-events-none shadow-2xs`}
+              >
+                <Plus className="w-4 h-4 stroke-[2.5]" />
+              </button>
             </div>
           </div>
 
           {/* ============================================================ */}
-          {/* 5. GIỜ KẾT THÚC TỰ ĐỘNG (Không cho chỉnh thủ công)           */}
+          {/* 5. SỐ LƯỢNG KHÁCH                                            */}
           {/* ============================================================ */}
-          <div className={`${cardBg} p-3.5 rounded-2xl border ${cardBorder} shadow-xs flex items-center justify-between`}>
-            <div>
-              <span className={`text-[12px] font-bold ${textSecondary} block leading-tight`}>
-                Giờ kết thúc (Tự động tính)
-              </span>
-              <p className={`text-[11px] ${textSecondary} mt-0.5`}>
-                {startTime} + {DURATION_OPTIONS.find((d) => d.minutes === durationMinutes)?.label || `${durationMinutes}p`}
-              </p>
+          <div className={`${cardBg} px-3.5 py-2.5 rounded-xl border ${cardBorder} shadow-xs space-y-1.5`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 shrink-0">
+                <Users className="w-4 h-4 text-[#32ADE6]" />
+                <span className={`text-[12px] font-bold ${textPrimary}`}>
+                  Số lượng khách
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setGuestCount((prev) => Math.max(1, prev - 1))}
+                  disabled={guestCount <= 1}
+                  aria-label="Giảm số khách"
+                  className={`w-9 h-8 rounded-lg font-bold flex items-center justify-center border ${cardBorder} ${inputBg} ${textPrimary} disabled:opacity-30 active:scale-95 transition-all cursor-pointer shadow-2xs`}
+                >
+                  <Minus className="w-3.5 h-3.5 stroke-[2.5]" />
+                </button>
+                <span className="font-mono font-black text-[15px] px-3 py-1 rounded-lg text-[#32ADE6] bg-[#32ADE6]/10 select-none">
+                  {guestCount} khách
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setGuestCount((prev) => prev + 1)}
+                  aria-label="Tăng số khách"
+                  className={`w-9 h-8 rounded-lg font-bold flex items-center justify-center border ${cardBorder} ${inputBg} ${textPrimary} active:scale-95 transition-all cursor-pointer shadow-2xs`}
+                >
+                  <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                </button>
+              </div>
             </div>
-            <div className="text-right">
-              <span className="text-[18px] font-black text-[#34C759] tracking-tight bg-[#34C759]/10 px-3 py-1 rounded-xl font-mono">
-                {endCalculation.displayFormatted}
-              </span>
-              {endCalculation.isNextDay && (
-                <p className="text-[10px] font-bold text-[#FF9500] mt-0.5">Sang ngày hôm sau</p>
+          </div>
+
+          {/* ============================================================ */}
+          {/* 7. CHỌN CTV THỰC HIỆN (Bắt buộc 100% CTV)                   */}
+          {/* ============================================================ */}
+          <div className={`${cardBg} px-3.5 py-2.5 rounded-xl border ${cardBorder} shadow-xs space-y-2`}>
+            <div className="flex items-center justify-between">
+              <label htmlFor="booking-select-ctv" className={`text-[12px] font-bold ${textSecondary} flex items-center gap-1.5`}>
+                <User className="w-3.5 h-3.5 text-[#5856D6]" />
+                <span>CTV thực hiện</span> <span className="text-[#FF3B30]">*</span>
+              </label>
+              {selectedCTV?.phone && (
+                <span className="text-[11px] font-semibold text-[#5856D6]">
+                  {selectedCTV.phone}
+                </span>
               )}
             </div>
-          </div>
 
-          {/* ============================================================ */}
-          {/* 6. NGƯỜI MAKE: TÔI / CTV                                    */}
-          {/* ============================================================ */}
-          <div className={`${cardBg} p-3.5 rounded-2xl border ${cardBorder} shadow-xs space-y-2.5`}>
-            <span className={`text-[12px] font-bold ${textSecondary} block`}>
-              Người make
-            </span>
+            <select
+              id="booking-select-ctv"
+              value={ctvId}
+              onChange={(e) => {
+                setCtvId(e.target.value);
+                if (errors.ctvId) setErrors((prev) => ({ ...prev, ctvId: '' }));
+              }}
+              className={`w-full h-10 px-3 rounded-lg ${inputBg} border ${cardBorder} text-[13.5px] font-semibold ${textPrimary} focus:outline-none`}
+            >
+              {ctvs.map((c) => (
+                <option key={c.id} value={c.id}>
+                  CTV {c.name} {c.phone ? `(${c.phone})` : ''}
+                </option>
+              ))}
+            </select>
+            {errors.ctvId && <p className="text-[11px] text-[#FF3B30] font-medium">{errors.ctvId}</p>}
 
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                id="performer-owner-btn"
-                type="button"
-                onClick={() => setPerformerType('owner')}
-                style={
-                  performerType === 'owner'
-                    ? { backgroundColor: accentConfig.hex, color: '#FFFFFF' }
-                    : undefined
-                }
-                className={`h-11 rounded-xl text-[14px] font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                  performerType === 'owner'
-                    ? 'shadow-xs scale-[1.01]'
-                    : `${inputBg} ${textSecondary} hover:${textPrimary} border ${cardBorder}`
-                }`}
-              >
-                <span>👑</span>
-                Tôi
-              </button>
-
-              <button
-                id="performer-ctv-btn"
-                type="button"
-                onClick={() => setPerformerType('ctv')}
-                className={`h-11 rounded-xl text-[14px] font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                  performerType === 'ctv'
-                    ? 'bg-[#5856D6] text-white shadow-xs scale-[1.01]'
-                    : `${inputBg} ${textSecondary} hover:${textPrimary} border ${cardBorder}`
-                }`}
-              >
-                <span>🤝</span>
-                CTV
-              </button>
-            </div>
-
-            {/* Chọn CTV khi chọn mục CTV */}
-            {performerType === 'ctv' && (
-              <div className={`pt-2 border-t ${cardBorder} space-y-2`}>
-                <label className={`block text-[11px] font-bold ${textSecondary}`}>
-                  Chọn CTV thực hiện
-                </label>
-                <select
-                  id="booking-select-ctv"
-                  value={ctvId}
-                  onChange={(e) => setCtvId(e.target.value)}
-                  className={`w-full h-11 px-3 rounded-xl ${inputBg} border ${cardBorder} text-[14px] font-semibold ${textPrimary} focus:outline-none`}
-                >
-                  {ctvs.map((ctv) => (
-                    <option key={ctv.id} value={ctv.id}>
-                      {ctv.name} ({ctv.phone})
-                    </option>
-                  ))}
-                </select>
-
-                {conflicts.length > 0 && (
-                  <div className="p-2.5 bg-[#FF3B30]/10 border border-[#FF3B30]/30 rounded-xl flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4 text-[#FF3B30] shrink-0" />
-                    <p className="text-[11px] text-[#FF3B30] font-medium leading-tight">
-                      CTV {selectedCTV?.name} đang có lịch trùng lúc {conflicts[0].overlapStart} – {conflicts[0].overlapEnd}!
-                    </p>
-                  </div>
-                )}
+            {conflicts.length > 0 && (
+              <div className="p-2 bg-[#FF3B30]/10 border border-[#FF3B30]/30 rounded-lg flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-[#FF3B30] shrink-0" />
+                <p className="text-[11px] text-[#FF3B30] font-medium leading-tight">
+                  CTV {selectedCTV?.name} đang có lịch trùng lúc {conflicts[0].overlapStart} – {conflicts[0].overlapEnd}!
+                </p>
               </div>
             )}
           </div>
 
           {/* ============================================================ */}
-          {/* 7. THÔNG BÁO TRƯỚC                                          */}
+          {/* 8. TRẠNG THÁI LỊCH HẸN (6 trạng thái chuẩn)                  */}
           {/* ============================================================ */}
-          <div className={`${cardBg} p-3.5 rounded-2xl border ${cardBorder} shadow-xs space-y-2`}>
-            <div className="flex justify-between items-center">
-              <span className={`text-[12px] font-bold ${textSecondary} flex items-center gap-1.5`}>
-                <Bell className="w-3.5 h-3.5" style={{ color: accentConfig.hex }} />
-                Thông báo trước
-              </span>
-              <span className={`text-[11px] ${textSecondary}`}>Mặc định 30 phút</span>
-            </div>
+          <div className={`${cardBg} px-3.5 py-2.5 rounded-xl border ${cardBorder} shadow-xs space-y-2`}>
+            <span className={`text-[12px] font-bold ${textSecondary} block`}>
+              Trạng thái lịch hẹn
+            </span>
 
-            <div className="flex flex-wrap gap-1.5">
-              {REMINDER_CHOICES.map((choice) => {
-                const isSelected = reminder === choice.value;
+            <div className="grid grid-cols-3 gap-1.5">
+              {ALL_BOOKING_STATUSES.map((st) => {
+                const isSelected = status === st.key;
                 return (
                   <button
-                    key={choice.value}
-                    id={`reminder-option-${choice.value}`}
+                    key={st.key}
                     type="button"
-                    onClick={() => setReminder(choice.value)}
+                    onClick={() => setStatus(st.key)}
                     style={
                       isSelected
-                        ? { backgroundColor: accentConfig.hex, color: '#FFFFFF' }
+                        ? { backgroundColor: st.colorHex, color: '#FFFFFF', borderColor: st.colorHex }
                         : undefined
                     }
-                    className={`h-9 px-3 rounded-xl text-[12px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                    className={`h-8 px-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 border ${
                       isSelected
-                        ? 'shadow-xs'
-                        : `${inputBg} ${textPrimary} border ${cardBorder} hover:opacity-80`
+                        ? 'shadow-xs scale-[1.01]'
+                        : `${inputBg} ${textPrimary} ${cardBorder} hover:opacity-80 active:scale-95`
                     }`}
                   >
                     {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
-                    {choice.label}
+                    <span className="truncate">{st.label}</span>
                   </button>
                 );
               })}
@@ -634,9 +906,9 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
           </div>
 
           {/* ============================================================ */}
-          {/* 8. GHI CHÚ THÊM                                             */}
+          {/* 8. GHI CHÚ THÊM (Thu gọn chiều cao)                          */}
           {/* ============================================================ */}
-          <div className={`${cardBg} p-3.5 rounded-2xl border ${cardBorder} shadow-xs space-y-1.5`}>
+          <div className={`${cardBg} px-3.5 py-2 rounded-xl border ${cardBorder} shadow-xs space-y-1`}>
             <label
               htmlFor="booking-input-note"
               className={`block text-[12px] font-bold ${textSecondary}`}
@@ -649,7 +921,7 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
               value={note}
               onChange={(e) => setNote(e.target.value)}
               placeholder="Ví dụ: “Khách thích tông cam đào”, “Đến sớm 15 phút”…"
-              className={`w-full p-2.5 rounded-xl ${inputBg} border border-transparent text-[13px] ${textPrimary} focus:outline-none resize-none transition-all placeholder:${textSecondary}/60`}
+              className={`w-full p-2.5 rounded-lg ${inputBg} border border-transparent text-[13px] ${textPrimary} focus:outline-none resize-none transition-all placeholder:${textSecondary}/60`}
             />
           </div>
 
@@ -658,7 +930,10 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
         {/* ============================================================ */}
         {/* 9. NÚT "LƯU LỊCH MAKEUP" (Dưới cùng, to rõ, 1 chạm)         */}
         {/* ============================================================ */}
-        <div className={`p-4 border-t ${cardBorder} ${cardBg} shrink-0`}>
+        <div
+          style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)' }}
+          className={`p-4 border-t ${cardBorder} ${cardBg} shrink-0`}
+        >
           <button
             id="save-booking-submit-btn"
             type="button"

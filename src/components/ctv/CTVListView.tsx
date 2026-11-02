@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { CTV, Booking } from '../../types';
-import { Phone, Plus, Edit2, Trash2, Calendar, X } from 'lucide-react';
+import { Phone, Plus, Edit2, Trash2, Calendar, X, ChevronLeft } from 'lucide-react';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { BookingCard } from '../booking/BookingCard';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -11,6 +11,7 @@ interface CTVListViewProps {
   onSaveCTV: (ctv: CTV) => void;
   onDeleteCTV: (id: string) => void;
   onSelectBooking: (booking: Booking) => void;
+  onBack?: () => void;
 }
 
 export const CTVListView: React.FC<CTVListViewProps> = ({
@@ -18,9 +19,10 @@ export const CTVListView: React.FC<CTVListViewProps> = ({
   bookings,
   onSaveCTV,
   onDeleteCTV,
-  onSelectBooking
+  onSelectBooking,
+  onBack
 }) => {
-  const { isDark } = useTheme();
+  const { isDark, accentConfig } = useTheme();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingCTV, setEditingCTV] = useState<CTV | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -77,24 +79,55 @@ export const CTVListView: React.FC<CTVListViewProps> = ({
   return (
     <div id="ctv-list-root" className={`flex-1 flex flex-col overflow-hidden ${viewBg}`}>
       {/* Top Header */}
-      <div className={`${cardBg} px-5 pt-5 pb-3 border-b ${cardBorder} flex justify-between items-center shrink-0`}>
-        <div>
-          <h2 className={`text-xl font-bold ${textPrimary}`}>Danh sách CTV</h2>
-          <p className={`text-[12px] ${textSecondary}`}>Quản lý cộng tác viên trang điểm</p>
+      <div
+        className={`${cardBg} border-b ${cardBorder} shrink-0 select-none`}
+        style={{
+          paddingTop: 'max(env(safe-area-inset-top, 0px), 12px)',
+          paddingBottom: '12px',
+          paddingLeft: 'max(env(safe-area-inset-left, 0px), 20px)',
+          paddingRight: 'max(env(safe-area-inset-right, 0px), 20px)'
+        }}
+      >
+        {onBack && (
+          <div className="mb-2">
+            <button
+              id="ctv-back-to-settings-btn"
+              type="button"
+              onClick={onBack}
+              className="inline-flex items-center gap-1 text-[13px] font-bold hover:underline cursor-pointer"
+              style={{ color: accentConfig.hex }}
+            >
+              <ChevronLeft className="w-4 h-4" /> Cài đặt
+            </button>
+          </div>
+        )}
+
+        <div className="flex justify-between items-center">
+          <div>
+            <h2 className={`text-xl font-bold ${textPrimary}`}>Danh sách CTV</h2>
+            <p className={`text-[12px] ${textSecondary}`}>Quản lý cộng tác viên trang điểm</p>
+          </div>
+          <button
+            id="add-ctv-top-btn"
+            type="button"
+            onClick={handleOpenAdd}
+            className="px-3.5 py-1.5 rounded-full bg-[#5856D6] text-white text-[13px] font-bold shadow-xs hover:bg-[#4745B8] active:scale-95 transition-all flex items-center gap-1 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Thêm CTV
+          </button>
         </div>
-        <button
-          id="add-ctv-top-btn"
-          type="button"
-          onClick={handleOpenAdd}
-          className="px-3.5 py-1.5 rounded-full bg-[#5856D6] text-white text-[13px] font-bold shadow-xs hover:bg-[#4745B8] active:scale-95 transition-all flex items-center gap-1 cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          Thêm CTV
-        </button>
       </div>
 
       {/* CTV Cards List */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div
+        className="flex-1 overflow-y-auto ios-scrollable p-4 space-y-3"
+        style={{
+          paddingLeft: 'max(env(safe-area-inset-left, 0px), 16px)',
+          paddingRight: 'max(env(safe-area-inset-right, 0px), 16px)',
+          paddingBottom: 'calc(max(env(safe-area-inset-bottom, 0px), 12px) + 64px)'
+        }}
+      >
         {ctvs.map((ctv) => {
           const ctvBookings = bookings.filter(
             (b) => b.performerType === 'ctv' && b.ctvId === ctv.id && b.status !== 'cancelled'
@@ -183,10 +216,19 @@ export const CTVListView: React.FC<CTVListViewProps> = ({
           onClick={() => setViewScheduleCTV(null)}
         >
           <div
-            className={`${cardBg} w-full sm:max-w-md rounded-t-[28px] sm:rounded-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden border ${cardBorder}`}
+            style={{
+              maxHeight: 'calc(100% - max(env(safe-area-inset-top, 0px), 44px) - 12px)',
+              paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)'
+            }}
+            className={`${cardBg} w-full sm:max-w-md rounded-t-[28px] sm:rounded-2xl flex flex-col shadow-2xl overflow-hidden border ${cardBorder}`}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className={`p-4 border-b ${cardBorder} flex justify-between items-center ${isDark ? 'bg-[#141416]' : 'bg-[#F9F9F9]'}`}>
+            {/* iOS Pull Indicator / Grabber Handle */}
+            <div className="w-full flex justify-center pt-2.5 pb-1 shrink-0">
+              <div className="w-9 h-1 rounded-full bg-[#8E8E93]/40" />
+            </div>
+
+            <div className={`px-4 pt-1 pb-3 border-b ${cardBorder} flex justify-between items-center ${isDark ? 'bg-[#141416]' : 'bg-[#F9F9F9]'}`}>
               <div>
                 <h3 className={`font-bold text-[17px] ${textPrimary}`}>
                   Lịch của {viewScheduleCTV.name}

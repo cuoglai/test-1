@@ -1,6 +1,6 @@
 import React from 'react';
 import { ActiveTab } from '../../types';
-import { Calendar, ClipboardList, Users, Settings, Plus } from 'lucide-react';
+import { Calendar, ClipboardList, BarChart3, Settings, Plus } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 
 interface BottomNavProps {
@@ -21,23 +21,34 @@ export const BottomNav: React.FC<BottomNavProps> = ({
 
   return (
     <>
-      {/* Floating Action Button (+) */}
+      {/* Floating Action Button (+) - Cố định theo viewport, luôn ở trên Bottom Navigation */}
       <button
         id="floating-add-booking-btn"
         type="button"
         onClick={onOpenAddModal}
         title="Thêm lịch Makeup mới"
         aria-label="Thêm lịch Makeup mới"
-        style={{ backgroundColor: accentConfig.hex }}
-        className="fixed bottom-20 right-5 sm:right-8 z-30 w-14 h-14 text-white rounded-full shadow-lg hover:shadow-xl flex items-center justify-center text-3xl font-light hover:scale-105 active:scale-95 transition-all cursor-pointer border-2 border-white dark:border-[#1C1C1E]"
+        style={{
+          backgroundColor: accentConfig.hex,
+          bottom: 'calc(max(env(safe-area-inset-bottom, 0px), 12px) + 60px)',
+          right: 'max(env(safe-area-inset-right, 0px), 16px)',
+          position: 'fixed'
+        }}
+        className="z-30 w-13 h-13 sm:w-14 sm:h-14 text-white rounded-full shadow-lg hover:shadow-xl flex items-center justify-center text-3xl font-light hover:scale-105 active:scale-95 transition-all cursor-pointer border-0"
       >
-        <Plus className="w-7 h-7 stroke-[2.5]" />
+        <Plus className="w-6 h-6 sm:w-7 sm:h-7 stroke-[2.5]" />
       </button>
 
-      {/* Bottom Navigation Bar */}
+      {/* Bottom Navigation Bar - Gắn liền đáy màn hình chuẩn iOS với Safe Area */}
       <nav
         id="bottom-tab-navigation"
-        className={`h-16 sm:h-20 ${navBg} backdrop-blur-md border-t flex justify-around items-center px-4 pb-2 sm:pb-3 shrink-0 z-20`}
+        style={{
+          paddingTop: '8px',
+          paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 12px)',
+          paddingLeft: 'max(env(safe-area-inset-left, 0px), 12px)',
+          paddingRight: 'max(env(safe-area-inset-right, 0px), 12px)'
+        }}
+        className={`w-full ${navBg} backdrop-blur-xl border-t flex justify-around items-center shrink-0 z-20 select-none`}
       >
         {/* Tab 1: Lịch */}
         <button
@@ -67,18 +78,18 @@ export const BottomNav: React.FC<BottomNavProps> = ({
           <span className="text-[11px] mt-1 font-semibold">Booking</span>
         </button>
 
-        {/* Tab 3: CTV */}
+        {/* Tab 3: Thống kê CTV */}
         <button
-          id="nav-tab-ctv"
+          id="nav-tab-revenue"
           type="button"
-          onClick={() => onTabChange('ctv')}
-          style={activeTab === 'ctv' ? { color: accentConfig.hex } : undefined}
+          onClick={() => onTabChange('revenue')}
+          style={activeTab === 'revenue' ? { color: accentConfig.hex } : undefined}
           className={`flex flex-col items-center justify-center flex-1 py-1 transition-all cursor-pointer ${
-            activeTab === 'ctv' ? 'font-bold' : textInactive
+            activeTab === 'revenue' ? 'font-bold' : textInactive
           }`}
         >
-          <Users className="w-5 h-5" />
-          <span className="text-[11px] mt-1 font-semibold">CTV</span>
+          <BarChart3 className="w-5 h-5" />
+          <span className="text-[11px] mt-1 font-semibold">Thống kê</span>
         </button>
 
         {/* Tab 4: Cài đặt */}

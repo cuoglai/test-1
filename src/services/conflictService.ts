@@ -1,8 +1,9 @@
 import { Booking, CTVConflict } from '../types';
 
 export function timeToMinutes(timeStr: string): number {
+  if (!timeStr) return 0;
   const [h, m] = timeStr.split(':').map(Number);
-  return h * 60 + m;
+  return (h || 0) * 60 + (m || 0);
 }
 
 export function findCTVConflicts(
@@ -13,10 +14,10 @@ export function findCTVConflicts(
     startTime: string;
     endTime: string;
     ctvId?: string;
-    performerType: 'owner' | 'ctv';
+    performerType?: string;
   }
 ): CTVConflict[] {
-  if (candidate.performerType !== 'ctv' || !candidate.ctvId) {
+  if (!candidate.ctvId) {
     return [];
   }
 
@@ -33,7 +34,7 @@ export function findCTVConflicts(
     if (b.id === candidate.id) continue;
     if (b.status === 'cancelled') continue;
     if (b.date !== candidate.date) continue;
-    if (b.performerType !== 'ctv' || b.ctvId !== candidate.ctvId) continue;
+    if (b.ctvId !== candidate.ctvId) continue;
 
     const bStart = timeToMinutes(b.startTime);
     const bEnd = timeToMinutes(b.endTime);
@@ -56,3 +57,5 @@ export function findCTVConflicts(
 
   return conflicts;
 }
+
+export const findBookingConflicts = findCTVConflicts;

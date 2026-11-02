@@ -1,6 +1,13 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { ThemeMode, AccentColor } from '../types';
-import { getThemeMode, setThemeMode, getAccentColor, setAccentColor } from '../services/storageService';
+import {
+  getThemeMode,
+  setThemeMode,
+  getAccentColor,
+  setAccentColor,
+  getCustomAccentHex,
+  setCustomAccentHex
+} from '../services/storageService';
 
 export interface AccentColorItem {
   id: AccentColor;
@@ -11,7 +18,21 @@ export interface AccentColorItem {
   borderHex: string;
 }
 
-export const ACCENT_COLORS: Record<AccentColor, AccentColorItem> = {
+export function hexToRgba(hex: string, alpha: number): string {
+  let clean = hex.replace('#', '').trim();
+  if (clean.length === 3) {
+    clean = clean[0] + clean[0] + clean[1] + clean[1] + clean[2] + clean[2];
+  }
+  if (clean.length !== 6) {
+    return `rgba(0, 122, 255, ${alpha})`;
+  }
+  const r = parseInt(clean.substring(0, 2), 16) || 0;
+  const g = parseInt(clean.substring(2, 4), 16) || 0;
+  const b = parseInt(clean.substring(4, 6), 16) || 0;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+export const ACCENT_COLORS: Record<'blue' | 'purple' | 'pink' | 'orange' | 'green', AccentColorItem> = {
   blue: {
     id: 'blue',
     name: 'Xanh dương',
@@ -57,9 +78,11 @@ export const ACCENT_COLORS: Record<AccentColor, AccentColorItem> = {
 interface ThemeContextType {
   theme: ThemeMode;
   accent: AccentColor;
+  customHex: string;
   accentConfig: AccentColorItem;
   setTheme: (mode: ThemeMode) => void;
   setAccent: (color: AccentColor) => void;
+  setCustomColor: (hex: string) => void;
   isDark: boolean;
 }
 
@@ -68,8 +91,20 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [theme, setInternalTheme] = useState<ThemeMode>(() => getThemeMode());
   const [accent, setInternalAccent] = useState<AccentColor>(() => getAccentColor());
+  const [customHex, setInternalCustomHex] = useState<string>(() => getCustomAccentHex());
 
-  const accentConfig = ACCENT_COLORS[accent] || ACCENT_COLORS.blue;
+  const accentConfig: AccentColorItem =
+    accent === 'custom'
+      ? {
+          id: 'custom',
+          name: 'Tự chọn',
+          hex: customHex,
+          hoverHex: customHex,
+          lightBg: hexToRgba(customHex, 0.14),
+          borderHex: hexToRgba(customHex, 0.3)
+        }
+      : ACCENT_COLORS[accent as keyof typeof ACCENT_COLORS] || ACCENT_COLORS.blue;
+
   const isDark = theme === 'dark';
 
   const handleSetTheme = (newMode: ThemeMode) => {
@@ -82,13 +117,34 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setAccentColor(newAccent);
   };
 
+  const handleSetCustomColor = (hex: string) => {
+    const validHex = hex.startsWith('#') ? hex : `#${hex}`;
+    setInternalCustomHex(validHex);
+    setCustomAccentHex(validHex);
+    setInternalAccent('custom');
+    setAccentColor('custom');
+  };
+
   // Synchronize CSS custom variables & class on root
   useEffect(() => {
     const root = document.documentElement;
+    const body = document.body;
+    const headerBgColor = isDark ? '#1C1C1E' : '#FFFFFF';
+
     if (isDark) {
       root.classList.add('dark');
+      body.classList.add('dark');
     } else {
       root.classList.remove('dark');
+      body.classList.remove('dark');
+    }
+
+    root.style.backgroundColor = headerBgColor;
+    body.style.backgroundColor = headerBgColor;
+
+    const metaThemeColor = document.querySelector('meta[name="theme-color"]');
+    if (metaThemeColor) {
+      metaThemeColor.setAttribute('content', headerBgColor);
     }
 
     root.style.setProperty('--color-accent', accentConfig.hex);
@@ -102,9 +158,11 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       value={{
         theme,
         accent,
+        customHex,
         accentConfig,
         setTheme: handleSetTheme,
         setAccent: handleSetAccent,
+        setCustomColor: handleSetCustomColor,
         isDark
       }}
     >

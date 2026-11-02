@@ -1,9 +1,25 @@
-import React, { useState, useMemo } from 'react';
-import { Booking } from '../../types';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { motion } from 'motion/react';
+import { Booking, BookingStatus } from '../../types';
 import { BookingCard } from './BookingCard';
-import { Search, X, ClipboardList } from 'lucide-react';
+import { Search, X, ClipboardList, ChevronLeft, ChevronRight, ArrowUpDown, ChevronDown, Check, Clock, Edit3, Users } from 'lucide-react';
 import { findCTVConflicts } from '../../services/conflictService';
-import { useTheme } from '../../contexts/ThemeContext';
+import { useTheme, hexToRgba } from '../../contexts/ThemeContext';
+import { formatBookingCardDate, isCTVBooking, getBookingGuestCount } from '../../utils/formatters';
+
+export type BookingSortOrder = 'default' | 'created' | 'updated';
+
+export type StatusFilterType = 'all' | BookingStatus;
+
+const STATUS_FILTERS: { key: StatusFilterType; label: string; colorHex?: string }[] = [
+  { key: 'all', label: 'Tất cả' },
+  { key: 'deposited', label: 'Đã cọc', colorHex: '#007AFF' },
+  { key: 'finding_ctv', label: 'Đang tìm CTV', colorHex: '#FF9500' },
+  { key: 'assigned', label: 'Đã giao CTV', colorHex: '#5856D6' },
+  { key: 'rescheduled', label: 'Dời lịch', colorHex: '#32ADE6' },
+  { key: 'cancelled', label: 'Hủy', colorHex: '#FF3B30' },
+  { key: 'completed', label: 'Hoàn thành', colorHex: '#34C759' }
+];
 
 interface BookingListViewProps {
   bookings: Booking[];
@@ -18,36 +34,308 @@ export const BookingListView: React.FC<BookingListViewProps> = ({
 }) => {
   const { isDark, accentConfig } = useTheme();
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterType, setFilterType] = useState<'all' | 'owner' | 'ctv'>('all');
-  const [scrollProgress, setScrollProgress] = useState(0);
+  const [filterStatus, setFilterStatus] = useState<StatusFilterType>('all');
+  const [direction, setDirection] = useState<number>(0);
 
-  const COLLAPSE_DISTANCE = 70;
+  // Bộ lọc sắp xếp: mặc định (theo ngày diễn ra), ngày tạo (mới nhất), ngày sửa (mới nhất)
+  const [sortOrder, setSortOrder] = useState<BookingSortOrder>('default');
+  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
 
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const top = Math.max(0, e.currentTarget.scrollTop);
-    const progress = Math.min(1, Math.max(0, top / COLLAPSE_DISTANCE));
-    setScrollProgress(progress);
+  // Khi từ tab khác chuyển sang tab Booking, luôn đặt về lựa chọn 'mặc định'
+  useEffect(() => {
+    setSortOrder('default');
+  }, []);
+
+  // Thanh chuyển tháng: Mặc định chọn tháng hiện tại
+  const [currentYear, setCurrentYear] = useState<number>(() => new Date().getFullYear());
+  const [currentMonth, setCurrentMonth] = useState<number>(() => new Date().getMonth() + 1);
+
+  const handlePrevMonth = () => {
+    if (currentMonth === 1) {
+      setCurrentMonth(12);
+      setCurrentYear((y) => y - 1);
+    } else {
+      setCurrentMonth((m) => m - 1);
+    }
   };
 
-  const p = scrollProgress;
+  const handleNextMonth = () => {
+    if (currentMonth === 12) {
+      setCurrentMonth(1);
+      setCurrentYear((y) => y + 1);
+    } else {
+      setCurrentMonth((m) => m + 1);
+    }
+  };
 
-  // Stats - 3 required indicators: Tổng số ca, Tôi, CTV
-  const stats = useMemo(() => {
-    const active = bookings.filter((b) => b.status !== 'cancelled');
-    const totalCount = active.length;
-    const ownerCount = active.filter((b) => b.performerType === 'owner').length;
-    const ctvCount = active.filter((b) => b.performerType === 'ctv').length;
-    return { totalCount, ownerCount, ctvCount };
+  const handleGoCurrentMonth = () => {
+    const now = new Date();
+    setCurrentYear(now.getFullYear());
+    setCurrentMonth(now.getMonth() + 1);
+  };
+
+  const selectedMonthPrefix = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+
+  const todayStr = useMemo(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }, []);
+
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const targetGroupRef = useRef<HTMLDivElement | null>(null);
+  const lastScrolledMonthRef = useRef<string | null>(null);
+
+  // Cuộn mượt đưa đúng thẻ lịch hôm nay (hoặc lịch chưa diễn ra gần nhất) lên đầu trang
+  const scrollToTodayOrTarget = () => {
+    const now = new Date();
+    const thisMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    if (selectedMonthPrefix !== thisMonthPrefix) {
+      setCurrentYear(now.getFullYear());
+      setCurrentMonth(now.getMonth() + 1);
+      setTimeout(() => {
+        const todayEl = document.getElementById(`day-group-${todayStr}`);
+        if (todayEl) {
+          todayEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } else if (targetGroupRef.current) {
+          targetGroupRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } else if (scrollContainerRef.current) {
+          scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      }, 60);
+      return;
+    }
+
+    const todayEl = document.getElementById(`day-group-${todayStr}`);
+    if (todayEl) {
+      todayEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else if (targetGroupRef.current) {
+      targetGroupRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const pendingScrollDateRef = useRef<string | null>(null);
+
+  // Tìm ngày của thẻ lịch đang hiển thị sát mép trên màn hình
+  const getCurrentlyVisibleDate = (): string | null => {
+    if (!scrollContainerRef.current) return null;
+    const container = scrollContainerRef.current;
+    const containerRect = container.getBoundingClientRect();
+    const dayGroups = container.querySelectorAll<HTMLElement>('[id^="day-group-"]');
+    if (!dayGroups.length) return null;
+
+    for (let i = 0; i < dayGroups.length; i++) {
+      const el = dayGroups[i];
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom > containerRect.top + 30) {
+        return el.id.replace('day-group-', '');
+      }
+    }
+    return dayGroups[0].id.replace('day-group-', '');
+  };
+
+  // Lấy danh sách các ngày có lịch của bộ lọc đích
+  const getAvailableDatesForFilter = (sFilter: StatusFilterType): string[] => {
+    const term = searchTerm.toLowerCase().trim();
+    const dates = new Set<string>();
+    bookings.forEach((b) => {
+      if (!b.date || !b.date.startsWith(selectedMonthPrefix)) return;
+      if (sFilter !== 'all' && b.status !== sFilter) return;
+      const matchText =
+        !term ||
+        b.customerName.toLowerCase().includes(term) ||
+        (b.makeupInfo && b.makeupInfo.toLowerCase().includes(term)) ||
+        (b.note && b.note.toLowerCase().includes(term)) ||
+        b.customerPhone.includes(term) ||
+        b.customerAddress.toLowerCase().includes(term) ||
+        b.packageNameSnapshot.toLowerCase().includes(term) ||
+        (b.ctvNameSnapshot && b.ctvNameSnapshot.toLowerCase().includes(term));
+      if (matchText) {
+        dates.add(b.date);
+      }
+    });
+    return Array.from(dates).sort();
+  };
+
+  // Tìm chính ngày đó hoặc ngày gần nhất trong danh sách ngày có lịch
+  const findNearestDateInList = (targetDate: string, availableDates: string[]): string | null => {
+    if (!availableDates.length) return null;
+    if (availableDates.includes(targetDate)) return targetDate;
+
+    const targetTime = new Date(targetDate).getTime();
+    let closestDate = availableDates[0];
+    let minDiff = Math.abs(new Date(availableDates[0]).getTime() - targetTime);
+
+    for (let i = 1; i < availableDates.length; i++) {
+      const d = availableDates[i];
+      const diff = Math.abs(new Date(d).getTime() - targetTime);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closestDate = d;
+      } else if (diff === minDiff && d > closestDate) {
+        closestDate = d;
+      }
+    }
+    return closestDate;
+  };
+
+  // Chuyển bộ lọc và ghi nhớ vị trí ngày đang xem để hiển thị đúng ngày đó hoặc ngày gần nhất
+  const switchFilterWithDatePreservation = (newFilter: StatusFilterType, newDirection: number) => {
+    const currentVisibleDate = getCurrentlyVisibleDate() || todayStr;
+    const availableDates = getAvailableDatesForFilter(newFilter);
+    const targetDate = findNearestDateInList(currentVisibleDate, availableDates);
+    pendingScrollDateRef.current = targetDate;
+
+    setDirection(newDirection);
+    setFilterStatus(newFilter);
+  };
+
+  // Khi chuyển bộ lọc, cuộn ngay đến đúng thẻ ngày đang xem hoặc ngày gần nhất
+  useEffect(() => {
+    if (!pendingScrollDateRef.current) return;
+    const dateToScroll = pendingScrollDateRef.current;
+    pendingScrollDateRef.current = null;
+
+    const performScroll = () => {
+      const el = document.getElementById(`day-group-${dateToScroll}`);
+      if (el && scrollContainerRef.current) {
+        const container = scrollContainerRef.current;
+        const containerRect = container.getBoundingClientRect();
+        const elRect = el.getBoundingClientRect();
+        const targetScrollTop = container.scrollTop + (elRect.top - containerRect.top);
+        container.scrollTop = Math.max(0, targetScrollTop);
+      } else if (scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTop = 0;
+      }
+    };
+
+    performScroll();
+    const rId = requestAnimationFrame(performScroll);
+    return () => cancelAnimationFrame(rId);
+  }, [filterStatus]);
+
+  const handleSelectFilter = (newFilter: StatusFilterType) => {
+    const currentIndex = STATUS_FILTERS.findIndex((f) => f.key === filterStatus);
+    const newIndex = STATUS_FILTERS.findIndex((f) => f.key === newFilter);
+    if (newIndex !== currentIndex) {
+      switchFilterWithDatePreservation(newFilter, newIndex > currentIndex ? 1 : -1);
+    } else {
+      scrollToTodayOrTarget();
+    }
+  };
+
+  const handleSwipeNextFilter = () => {
+    const currentIndex = STATUS_FILTERS.findIndex((f) => f.key === filterStatus);
+    if (currentIndex < STATUS_FILTERS.length - 1) {
+      switchFilterWithDatePreservation(STATUS_FILTERS[currentIndex + 1].key, 1);
+    }
+  };
+
+  const handleSwipePrevFilter = () => {
+    const currentIndex = STATUS_FILTERS.findIndex((f) => f.key === filterStatus);
+    if (currentIndex > 0) {
+      switchFilterWithDatePreservation(STATUS_FILTERS[currentIndex - 1].key, -1);
+    }
+  };
+
+  // Cử chỉ chạm vuốt & kéo chuột để chuyển đổi bộ lọc
+  const touchStartX = useRef<number | null>(null);
+  const touchStartY = useRef<number | null>(null);
+  const touchStartTime = useRef<number>(0);
+  const mouseStartX = useRef<number | null>(null);
+  const mouseStartY = useRef<number | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+    touchStartTime.current = Date.now();
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current === null || touchStartY.current === null) return;
+    const deltaX = e.changedTouches[0].clientX - touchStartX.current;
+    const deltaY = e.changedTouches[0].clientY - touchStartY.current;
+    const deltaTime = Date.now() - touchStartTime.current;
+    touchStartX.current = null;
+    touchStartY.current = null;
+
+    const isHorizontal = Math.abs(deltaX) > Math.abs(deltaY) * 1.2;
+    const isSufficient = Math.abs(deltaX) >= 35 || (Math.abs(deltaX) >= 20 && deltaTime < 300);
+
+    if (isHorizontal && isSufficient) {
+      if (deltaX < 0) {
+        // Vuốt sang trái -> sang filter kế tiếp (Tất cả -> Tôi -> CTV), chặn ở CTV
+        handleSwipeNextFilter();
+      } else {
+        // Vuốt sang phải -> về filter trước đó (CTV -> Tôi -> Tất cả), chặn ở Tất cả
+        handleSwipePrevFilter();
+      }
+    }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    mouseStartX.current = e.clientX;
+    mouseStartY.current = e.clientY;
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    if (mouseStartX.current === null || mouseStartY.current === null) return;
+    const deltaX = e.clientX - mouseStartX.current;
+    const deltaY = e.clientY - mouseStartY.current;
+    mouseStartX.current = null;
+    mouseStartY.current = null;
+
+    if (Math.abs(deltaX) >= 45 && Math.abs(deltaX) > Math.abs(deltaY) * 1.2) {
+      if (deltaX < 0) {
+        handleSwipeNextFilter();
+      } else {
+        handleSwipePrevFilter();
+      }
+    }
+  };
+
+
+
+  // Lọc chỉ giữ lại lịch của CTV (loại bỏ hoàn toàn lịch của chính tôi/owner)
+  const ctvOnlyBookings = useMemo(() => {
+    return bookings.filter(isCTVBooking);
   }, [bookings]);
 
+  // Lọc danh sách lịch hẹn trong tháng được chọn
+  const monthBookings = useMemo(() => {
+    return ctvOnlyBookings.filter((b) => b.date && b.date.startsWith(selectedMonthPrefix));
+  }, [ctvOnlyBookings, selectedMonthPrefix]);
+
+  // Đếm số lượng theo 6 trạng thái trong tháng
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: monthBookings.length };
+    monthBookings.forEach((b) => {
+      counts[b.status] = (counts[b.status] || 0) + 1;
+    });
+    return counts;
+  }, [monthBookings]);
+
+  // Tổng số khách phục vụ trong tháng (trừ ca hủy), tính toán chuẩn xác từ ghi chú & giá
+  const totalGuests = useMemo(() => {
+    return monthBookings
+      .filter((b) => b.status !== 'cancelled')
+      .reduce((sum, b) => sum + getBookingGuestCount(b), 0);
+  }, [monthBookings]);
+
+  // Lọc theo trạng thái & tìm kiếm trong tháng
   const filteredBookings = useMemo(() => {
     const term = searchTerm.toLowerCase().trim();
-    return bookings.filter((b) => {
-      // Filter by performer type
-      if (filterType === 'owner' && b.performerType !== 'owner') return false;
-      if (filterType === 'ctv' && b.performerType !== 'ctv') return false;
+    return monthBookings.filter((b) => {
+      // Lọc theo trạng thái
+      if (filterStatus !== 'all' && b.status !== filterStatus) return false;
 
-      // Search by name, makeupInfo, note, phone, address
+      // Tìm kiếm theo tên khách, CTV, nội dung, SĐT, địa chỉ
       const matchText =
         !term ||
         b.customerName.toLowerCase().includes(term) ||
@@ -60,7 +348,104 @@ export const BookingListView: React.FC<BookingListViewProps> = ({
 
       return matchText;
     });
-  }, [bookings, searchTerm, filterType]);
+  }, [monthBookings, searchTerm, filterStatus]);
+
+  // Nhóm danh sách bookings theo ngày để phân chia khung màu xen kẽ (cho chế độ Mặc định)
+  const groupedBookings = useMemo(() => {
+    const map = new Map<string, Booking[]>();
+    filteredBookings.forEach((b) => {
+      const list = map.get(b.date) || [];
+      list.push(b);
+      map.set(b.date, list);
+    });
+    const entries = Array.from(map.entries());
+    entries.sort(([a], [b]) => a.localeCompare(b));
+    return entries.map(([date, items]) => ({
+      date,
+      bookings: items.sort((a, b) => a.startTime.localeCompare(b.startTime))
+    }));
+  }, [filteredBookings]);
+
+  // Sắp xếp danh sách booking theo Ngày tạo mới nhất hoặc Ngày sửa đổi mới nhất
+  const sortedBookings = useMemo(() => {
+    if (sortOrder === 'default') return [];
+    const list = [...filteredBookings];
+    if (sortOrder === 'created') {
+      // Ngày tạo mới nhất lên đầu
+      list.sort((a, b) => {
+        const timeA = a.createdAt || 0;
+        const timeB = b.createdAt || 0;
+        if (timeB !== timeA) return timeB - timeA;
+        return (b.date + b.startTime).localeCompare(a.date + a.startTime);
+      });
+    } else if (sortOrder === 'updated') {
+      // Ngày sửa đổi mới nhất lên đầu
+      list.sort((a, b) => {
+        const timeA = a.updatedAt || a.createdAt || 0;
+        const timeB = b.updatedAt || b.createdAt || 0;
+        if (timeB !== timeA) return timeB - timeA;
+        return (b.date + b.startTime).localeCompare(a.date + a.startTime);
+      });
+    }
+    return list;
+  }, [filteredBookings, sortOrder]);
+
+  const handleSelectSortOrder = (newOrder: BookingSortOrder) => {
+    setSortOrder(newOrder);
+    setIsSortMenuOpen(false);
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const formatTimestamp = (timestamp?: number) => {
+    if (!timestamp) return 'Chưa có';
+    const d = new Date(timestamp);
+    const hours = String(d.getHours()).padStart(2, '0');
+    const mins = String(d.getMinutes()).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${hours}:${mins} • ${day}/${month}/${year}`;
+  };
+
+  // 3. Tự động xác định vị trí của lịch hẹn đầu tiên của ngày hôm nay (hoặc lịch hẹn chưa diễn ra gần nhất)
+  const targetScrollDate = useMemo(() => {
+    const now = new Date();
+    const thisMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    if (selectedMonthPrefix !== thisMonthPrefix) return null;
+
+    // 1. Kiểm tra xem hôm nay có lịch không
+    const todayGroup = groupedBookings.find((g) => g.date === todayStr);
+    if (todayGroup) return todayStr;
+
+    // 2. Nếu hôm nay không có lịch, tìm ngày chưa diễn ra gần nhất trong tháng
+    const nextGroup = groupedBookings.find((g) => g.date > todayStr);
+    if (nextGroup) return nextGroup.date;
+
+    return null;
+  }, [selectedMonthPrefix, groupedBookings, todayStr]);
+
+
+
+  // Hiển thị ngay 'Ngày hôm nay' (hoặc ngày gần nhất) lên đầu màn hình khi lần đầu mở tháng đó
+  // KHÔNG gọi khi chỉ đơn thuần chuyển đổi filterType (Tôi/CTV/Tất cả) để tránh giật / nảy trang
+  useEffect(() => {
+    if (!targetScrollDate) return;
+    if (lastScrolledMonthRef.current === selectedMonthPrefix) return;
+    lastScrolledMonthRef.current = selectedMonthPrefix;
+
+    const jumpToTarget = () => {
+      if (targetGroupRef.current) {
+        targetGroupRef.current.scrollIntoView({
+          behavior: 'instant' as ScrollBehavior,
+          block: 'start'
+        });
+      }
+    };
+
+    jumpToTarget();
+  }, [targetScrollDate, selectedMonthPrefix]);
 
   const viewBg = isDark ? 'bg-[#000000]' : 'bg-[#F2F2F7]';
   const cardBg = isDark ? 'bg-[#1C1C1E]' : 'bg-white';
@@ -71,267 +456,259 @@ export const BookingListView: React.FC<BookingListViewProps> = ({
 
   return (
     <div id="booking-list-root" className={`flex-1 flex flex-col overflow-hidden ${viewBg}`}>
-      {/* Header with Title, Stats & Filter, and Search - Tự động thu gọn liên tục khi vuốt */}
+      {/* Static Compact Header: Cố định trạng thái thu gọn tối giản, không co giãn khi cuộn */}
       <div
-        className={`${cardBg} px-4 border-b ${cardBorder} shrink-0 select-none`}
+        className={`${cardBg} border-b ${cardBorder} shrink-0 select-none`}
         style={{
-          paddingTop: `${Math.round(14 - p * 6)}px`,
-          paddingBottom: `${Math.round(11 - p * 3)}px`
+          paddingTop: 'max(env(safe-area-inset-top, 0px), 12px)',
+          paddingBottom: '10px',
+          paddingLeft: 'max(env(safe-area-inset-left, 0px), 16px)',
+          paddingRight: 'max(env(safe-area-inset-right, 0px), 16px)'
         }}
       >
-        <div className="flex justify-between items-center mb-2.5">
-          <h2
-            style={{ fontSize: `${Math.round(19 - p * 3)}px` }}
-            className={`font-bold ${textPrimary} tracking-tight`}
-          >
-            Danh sách Booking
-          </h2>
-          <button
-            type="button"
-            onClick={onOpenAddBooking}
-            style={{ backgroundColor: accentConfig.hex }}
-            className="px-3 py-1 rounded-full text-white text-[12px] font-bold shadow-xs active:scale-95 transition-all cursor-pointer"
-          >
-            + Tạo lịch
-          </button>
-        </div>
+        {/* Hàng 1: Single-line Header (Bên trái: 'Booking' + tóm tắt ca/khách, Bên phải: Cụm chuyển tháng) */}
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="flex items-baseline gap-2">
+            <h2 className={`text-[18px] sm:text-[20px] font-black ${textPrimary} tracking-tight`}>
+              Booking
+            </h2>
+            <span className={`text-[11.5px] font-semibold ${textSecondary}`}>
+              {monthBookings.length} ca · {totalGuests} khách
+            </span>
+          </div>
 
-        {/* 3 Thống kê & Bộ lọc: Tổng số ca, Tôi, CTV - Tự động thu gọn mượt mà theo scrollProgress */}
-        <div
-          className="grid grid-cols-3 mb-2.5"
-          style={{ gap: `${Math.round(8 - p * 2)}px` }}
-        >
-          {/* 1. Tất cả */}
-          <button
-            type="button"
-            onClick={() => setFilterType('all')}
-            style={{
-              backgroundColor: filterType === 'all' ? accentConfig.hex : undefined,
-              borderColor: filterType === 'all' ? accentConfig.hex : undefined,
-              color: filterType === 'all' ? '#FFFFFF' : undefined,
-              paddingTop: `${Math.round(6 - p * 2.5)}px`,
-              paddingBottom: `${Math.round(6 - p * 2.5)}px`,
-              borderRadius: `${Math.round(12 - p * 2)}px`
-            }}
-            className={`px-2 text-center border cursor-pointer active:scale-[0.98] ${
-              filterType === 'all'
-                ? 'shadow-xs'
-                : `${isDark ? 'bg-[#2C2C2E] border-[#38383A]' : 'bg-[#F9F9F9] border-[#E5E5EA]'} ${textPrimary} hover:opacity-80`
-            }`}
-          >
-            <div className="flex flex-col items-center justify-center text-center">
-              <div
-                style={{
-                  height: `${Math.max(0, (1 - p) * 14)}px`,
-                  opacity: Math.max(0, 1 - p * 1.8),
-                  marginBottom: `${Math.max(0, (1 - p) * 2)}px`,
-                  overflow: 'hidden'
-                }}
-                className={`text-[10px] uppercase font-bold tracking-wider truncate ${
-                  filterType === 'all' ? 'text-white/80' : textSecondary
-                }`}
-              >
-                Tổng số ca
-              </div>
-              <div
-                style={{ fontSize: `${Math.round(15 - p * 2.5)}px` }}
-                className="font-extrabold leading-tight flex items-center justify-center"
-              >
-                <span
-                  style={{
-                    opacity: Math.min(1, Math.max(0, (p - 0.2) / 0.7)),
-                    maxWidth: `${p * 50}px`,
-                    overflow: 'hidden',
-                    whiteSpace: 'nowrap',
-                    marginRight: `${p * 4}px`
-                  }}
-                  className="text-[11px] font-bold"
-                >
-                  Tất cả
-                </span>
-                <span>{stats.totalCount}</span>
-                <span
-                  style={{
-                    opacity: Math.max(0, 1 - p * 1.8),
-                    maxWidth: `${(1 - p) * 18}px`,
-                    overflow: 'hidden',
-                    marginLeft: `${(1 - p) * 3}px`
-                  }}
-                  className={`text-[11px] font-normal ${filterType === 'all' ? 'text-white/80' : textSecondary}`}
-                >
-                  ca
-                </span>
-              </div>
-            </div>
-          </button>
-
-          {/* 2. Tôi */}
-          <button
-            type="button"
-            onClick={() => setFilterType('owner')}
-            style={{
-              backgroundColor: filterType === 'owner' ? accentConfig.hex : undefined,
-              borderColor: filterType === 'owner' ? accentConfig.hex : undefined,
-              color: filterType === 'owner' ? '#FFFFFF' : undefined,
-              paddingTop: `${Math.round(6 - p * 2.5)}px`,
-              paddingBottom: `${Math.round(6 - p * 2.5)}px`,
-              borderRadius: `${Math.round(12 - p * 2)}px`
-            }}
-            className={`px-2 text-center border cursor-pointer active:scale-[0.98] ${
-              filterType === 'owner'
-                ? 'shadow-xs'
-                : `${isDark ? 'bg-[#2C2C2E] border-[#38383A]' : 'bg-[#F9F9F9] border-[#E5E5EA]'} ${textPrimary} hover:opacity-80`
-            }`}
-          >
-            <div className="flex flex-col items-center justify-center text-center">
-              <div
-                style={{
-                  height: `${Math.max(0, (1 - p) * 14)}px`,
-                  opacity: Math.max(0, 1 - p * 1.8),
-                  marginBottom: `${Math.max(0, (1 - p) * 2)}px`,
-                  overflow: 'hidden'
-                }}
-                className={`text-[10px] uppercase font-bold tracking-wider truncate flex items-center justify-center gap-0.5 ${
-                  filterType === 'owner' ? 'text-white/80' : textSecondary
-                }`}
-              >
-                <span>👑</span> Tôi
-              </div>
-              <div
-                style={{ fontSize: `${Math.round(15 - p * 2.5)}px` }}
-                className="font-extrabold leading-tight flex items-center justify-center"
-              >
-                <span
-                  style={{
-                    opacity: Math.min(1, Math.max(0, (p - 0.2) / 0.7)),
-                    maxWidth: `${p * 50}px`,
-                    overflow: 'hidden',
-                    whiteSpace: 'nowrap',
-                    marginRight: `${p * 4}px`
-                  }}
-                  className="text-[11px] font-bold"
-                >
-                  👑 Tôi
-                </span>
-                <span style={{ color: filterType === 'owner' ? '#FFFFFF' : accentConfig.hex }}>
-                  {stats.ownerCount}
-                </span>
-                <span
-                  style={{
-                    opacity: Math.max(0, 1 - p * 1.8),
-                    maxWidth: `${(1 - p) * 18}px`,
-                    overflow: 'hidden',
-                    marginLeft: `${(1 - p) * 3}px`
-                  }}
-                  className={`text-[11px] font-normal ${filterType === 'owner' ? 'text-white/80' : textSecondary}`}
-                >
-                  ca
-                </span>
-              </div>
-            </div>
-          </button>
-
-          {/* 3. CTV */}
-          <button
-            type="button"
-            onClick={() => setFilterType('ctv')}
-            style={{
-              paddingTop: `${Math.round(6 - p * 2.5)}px`,
-              paddingBottom: `${Math.round(6 - p * 2.5)}px`,
-              borderRadius: `${Math.round(12 - p * 2)}px`
-            }}
-            className={`px-2 text-center border cursor-pointer active:scale-[0.98] ${
-              filterType === 'ctv'
-                ? 'bg-[#5856D6] text-white border-[#5856D6] shadow-xs'
-                : `${isDark ? 'bg-[#2C2C2E] border-[#38383A]' : 'bg-[#F9F9F9] border-[#E5E5EA]'} text-[#5856D6] hover:opacity-80`
-            }`}
-          >
-            <div className="flex flex-col items-center justify-center text-center">
-              <div
-                style={{
-                  height: `${Math.max(0, (1 - p) * 14)}px`,
-                  opacity: Math.max(0, 1 - p * 1.8),
-                  marginBottom: `${Math.max(0, (1 - p) * 2)}px`,
-                  overflow: 'hidden'
-                }}
-                className={`text-[10px] uppercase font-bold tracking-wider truncate flex items-center justify-center gap-0.5 ${
-                  filterType === 'ctv' ? 'text-white/80' : textSecondary
-                }`}
-              >
-                <span>🤝</span> CTV
-              </div>
-              <div
-                style={{ fontSize: `${Math.round(15 - p * 2.5)}px` }}
-                className="font-extrabold leading-tight flex items-center justify-center"
-              >
-                <span
-                  style={{
-                    opacity: Math.min(1, Math.max(0, (p - 0.2) / 0.7)),
-                    maxWidth: `${p * 50}px`,
-                    overflow: 'hidden',
-                    whiteSpace: 'nowrap',
-                    marginRight: `${p * 4}px`
-                  }}
-                  className="text-[11px] font-bold"
-                >
-                  🤝 CTV
-                </span>
-                <span className={filterType === 'ctv' ? 'text-white' : 'text-[#5856D6]'}>
-                  {stats.ctvCount}
-                </span>
-                <span
-                  style={{
-                    opacity: Math.max(0, 1 - p * 1.8),
-                    maxWidth: `${(1 - p) * 18}px`,
-                    overflow: 'hidden',
-                    marginLeft: `${(1 - p) * 3}px`
-                  }}
-                  className={`text-[11px] font-normal ${filterType === 'ctv' ? 'text-white/80' : textSecondary}`}
-                >
-                  ca
-                </span>
-              </div>
-            </div>
-          </button>
-        </div>
-
-        {/* Search input */}
-        <div className="relative">
-          <Search className={`w-4 h-4 ${textSecondary} absolute left-3.5 top-1/2 -translate-y-1/2`} />
-          <input
-            id="booking-search-input"
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Tìm theo tên, SĐT, địa chỉ, ghi chú..."
-            className={`w-full h-9 rounded-xl ${inputBg} text-[13px] ${textPrimary} placeholder:${textSecondary} focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] border border-transparent pl-9 pr-9`}
-          />
-          {searchTerm && (
+          {/* Cụm chuyển tháng < Tháng MM/YYYY > */}
+          <div className="flex items-center gap-1">
             <button
-              id="clear-search-btn"
+              id="booking-prev-month-btn"
               type="button"
-              onClick={() => setSearchTerm('')}
-              className={`absolute right-3 top-1/2 -translate-y-1/2 ${textSecondary} hover:${textPrimary}`}
+              onClick={handlePrevMonth}
+              title="Tháng trước"
+              className={`w-7.5 h-7.5 rounded-full ${inputBg} flex items-center justify-center ${textPrimary} hover:opacity-80 active:scale-95 transition-all cursor-pointer border ${cardBorder}`}
             >
-              <X className="w-4 h-4" />
+              <ChevronLeft className="w-4 h-4" />
             </button>
-          )}
+
+            <button
+              id="booking-current-month-btn"
+              type="button"
+              onClick={handleGoCurrentMonth}
+              title="Về tháng hiện tại"
+              className={`text-[12px] font-bold px-2.5 h-7.5 rounded-full ${inputBg} ${textPrimary} hover:opacity-80 active:scale-95 transition-all cursor-pointer border ${cardBorder}`}
+            >
+              Tháng {String(currentMonth).padStart(2, '0')}/{currentYear}
+            </button>
+
+            <button
+              id="booking-next-month-btn"
+              type="button"
+              onClick={handleNextMonth}
+              title="Tháng sau"
+              className={`w-7.5 h-7.5 rounded-full ${inputBg} flex items-center justify-center ${textPrimary} hover:opacity-80 active:scale-95 transition-all cursor-pointer border ${cardBorder}`}
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Hàng 2: Thanh lọc 6 trạng thái + Tất cả dạng cuộn ngang êm ái */}
+        <div className="mb-2 -mx-1 px-1 overflow-x-auto no-scrollbar flex items-center gap-1.5 py-0.5">
+          {STATUS_FILTERS.map((f) => {
+            const isSelected = filterStatus === f.key;
+            const count = statusCounts[f.key] || 0;
+            return (
+              <button
+                key={f.key}
+                id={`filter-status-${f.key}-btn`}
+                type="button"
+                onClick={() => handleSelectFilter(f.key)}
+                style={
+                  isSelected
+                    ? {
+                        backgroundColor: f.colorHex || accentConfig.hex,
+                        borderColor: f.colorHex || accentConfig.hex,
+                        color: '#FFFFFF'
+                      }
+                    : undefined
+                }
+                className={`flex items-center gap-1.5 py-1 px-2.5 rounded-xl text-[12px] font-semibold transition-all cursor-pointer select-none active:scale-[0.98] shrink-0 border ${
+                  isSelected
+                    ? 'shadow-xs font-bold'
+                    : `${cardBg} ${cardBorder} ${textSecondary} hover:${textPrimary}`
+                }`}
+              >
+                <span>{f.label}</span>
+                <span
+                  className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold leading-tight ${
+                    isSelected
+                      ? 'bg-white/25 text-white'
+                      : isDark
+                      ? 'bg-white/10 text-slate-300'
+                      : 'bg-black/8 text-slate-600'
+                  }`}
+                >
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Hàng 3: Ô tìm kiếm + Lựa chọn lọc sắp xếp (Mặc định / Ngày tạo / Ngày sửa) */}
+        <div className="flex items-center gap-1.5 relative">
+          <div className="relative flex-1 min-w-0">
+            <Search className={`w-3.5 h-3.5 ${textSecondary} absolute left-3 top-1/2 -translate-y-1/2`} />
+            <input
+              id="booking-search-input"
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Tìm theo tên, SĐT, địa chỉ, ghi chú..."
+              className={`w-full h-8 rounded-xl ${inputBg} text-[12.5px] ${textPrimary} placeholder:${textSecondary} focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] border border-transparent pl-8.5 pr-7`}
+            />
+            {searchTerm && (
+              <button
+                id="clear-search-btn"
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className={`absolute right-2 top-1/2 -translate-y-1/2 ${textSecondary} hover:${textPrimary} p-0.5`}
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Lựa chọn sắp xếp / lọc: Mặc định, Ngày tạo, Ngày sửa */}
+          <div className="relative shrink-0">
+            <button
+              id="booking-sort-selector-btn"
+              type="button"
+              onClick={() => setIsSortMenuOpen((prev) => !prev)}
+              style={{
+                backgroundColor: sortOrder !== 'default' ? accentConfig.hex : undefined,
+                color: sortOrder !== 'default' ? '#FFFFFF' : undefined
+              }}
+              className={`h-8 px-2 sm:px-2.5 rounded-xl border flex items-center gap-1 text-[11.5px] font-bold transition-all cursor-pointer select-none active:scale-95 ${
+                sortOrder !== 'default'
+                  ? 'border-transparent shadow-xs'
+                  : `${cardBorder} ${inputBg} ${textPrimary} hover:opacity-90`
+              }`}
+            >
+              <ArrowUpDown className="w-3.5 h-3.5 shrink-0" />
+              <span className="whitespace-nowrap">
+                {sortOrder === 'default'
+                  ? 'Mặc định'
+                  : sortOrder === 'created'
+                  ? 'Ngày tạo'
+                  : 'Ngày sửa'}
+              </span>
+              <ChevronDown className={`w-3 h-3 transition-transform duration-200 shrink-0 ${isSortMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {/* Dropdown 3 lựa chọn */}
+            {isSortMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setIsSortMenuOpen(false)}
+                />
+                <div
+                  className={`absolute right-0 top-9.5 z-50 w-48 p-1.5 rounded-2xl border shadow-xl ${cardBorder} ${
+                    isDark ? 'bg-[#1C1C1E]' : 'bg-white'
+                  }`}
+                  style={{
+                    boxShadow: isDark
+                      ? '0 10px 25px -5px rgba(0, 0, 0, 0.7)'
+                      : '0 10px 25px -5px rgba(0, 0, 0, 0.15)'
+                  }}
+                >
+                  {[
+                    { id: 'default', label: 'Mặc định', desc: 'Theo lịch hẹn diễn ra' },
+                    { id: 'created', label: 'Ngày tạo', desc: 'Lịch mới tạo lên đầu' },
+                    { id: 'updated', label: 'Ngày sửa', desc: 'Lịch mới sửa lên đầu' }
+                  ].map((opt) => {
+                    const isSelected = sortOrder === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        id={`sort-option-${opt.id}`}
+                        type="button"
+                        onClick={() => handleSelectSortOrder(opt.id as BookingSortOrder)}
+                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left transition-colors cursor-pointer ${
+                          isSelected
+                            ? isDark
+                              ? 'bg-white/10'
+                              : 'bg-black/5'
+                            : isDark
+                            ? 'hover:bg-white/5'
+                            : 'hover:bg-black/4'
+                        }`}
+                      >
+                        <div className="flex flex-col">
+                          <span
+                            className="text-[12.5px] font-bold"
+                            style={{
+                              color: isSelected ? accentConfig.hex : undefined
+                            }}
+                          >
+                            {opt.label}
+                          </span>
+                          <span className={`text-[10px] ${textSecondary}`}>
+                            {opt.desc}
+                          </span>
+                        </div>
+                        {isSelected && (
+                          <Check
+                            className="w-4 h-4 shrink-0"
+                            style={{ color: accentConfig.hex }}
+                          />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Bookings List with min-h for smooth header collapse on any length */}
+      {/* Bookings List with horizontal swipe to switch filters */}
       <div
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 pt-3"
-        style={{ WebkitOverflowScrolling: 'touch' }}
+        ref={scrollContainerRef}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
+        className="flex-1 overflow-y-auto ios-scrollable pt-3 select-none"
+        style={{
+          WebkitOverflowScrolling: 'touch',
+          touchAction: 'pan-y',
+          paddingLeft: 'max(env(safe-area-inset-left, 0px), 16px)',
+          paddingRight: 'max(env(safe-area-inset-right, 0px), 16px)'
+        }}
       >
-        <div className="min-h-[calc(100%+85px)] space-y-3 pb-24">
+        <motion.div
+          key={filterStatus}
+          initial={{ x: direction > 0 ? 24 : direction < 0 ? -24 : 0, opacity: 0.85 }}
+          animate={{ x: 0, opacity: 1 }}
+          transition={{
+            x: { duration: 0.2, ease: [0.22, 1, 0.36, 1] },
+            opacity: { duration: 0.15, ease: 'easeOut' }
+          }}
+          style={{
+            paddingBottom: 'calc(max(env(safe-area-inset-bottom, 0px), 12px) + 64px)'
+          }}
+          className="space-y-4 sm:space-y-5"
+        >
         {filteredBookings.length === 0 ? (
           <div className="py-16 text-center">
             <ClipboardList className={`w-12 h-12 ${textSecondary} mx-auto mb-2 opacity-50`} />
-            <p className={`text-[15px] font-semibold ${textPrimary}`}>Không tìm thấy booking nào</p>
+            <p className={`text-[15px] font-semibold ${textPrimary}`}>
+              Không có booking nào trong tháng {String(currentMonth).padStart(2, '0')}/{currentYear}
+            </p>
             <p className={`text-[13px] ${textSecondary} mt-0.5`}>
-              Thử tìm kiếm với từ khóa khác hoặc tạo booking mới.
+              Thử tìm kiếm với từ khóa khác, đổi tháng hoặc tạo booking mới.
             </p>
             <button
               type="button"
@@ -342,8 +719,9 @@ export const BookingListView: React.FC<BookingListViewProps> = ({
               + Tạo booking mới
             </button>
           </div>
-        ) : (
-          filteredBookings.map((booking) => {
+        ) : sortOrder !== 'default' ? (
+          /* Hiển thị danh sách khi lọc theo Ngày tạo hoặc Ngày sửa mới nhất */
+          sortedBookings.map((booking) => {
             const conflicts = findCTVConflicts(bookings, {
               id: booking.id,
               date: booking.date,
@@ -353,21 +731,160 @@ export const BookingListView: React.FC<BookingListViewProps> = ({
               ctvId: booking.ctvId
             });
 
+            const cardDate = formatBookingCardDate(booking.date);
+            const isPastDay = booking.date < todayStr;
+
             return (
-              <div key={booking.id} className="space-y-1">
-                <div className={`px-1 text-[11px] font-bold ${textSecondary} uppercase`}>
-                  {booking.date}
+              <div
+                key={booking.id}
+                id={`sorted-booking-${booking.id}`}
+                style={{
+                  backgroundColor: isPastDay
+                    ? 'transparent'
+                    : isDark
+                    ? 'rgba(255,255,255,0.03)'
+                    : hexToRgba(accentConfig.hex, 0.08),
+                  borderColor: isPastDay
+                    ? isDark ? '#2C2C2E' : '#E5E5EA'
+                    : hexToRgba(accentConfig.hex, 0.25)
+                }}
+                className="p-3 sm:p-3.5 rounded-2xl border transition-all space-y-2.5 shadow-2xs"
+              >
+                {/* Header hiển thị ngày tạo hoặc ngày sửa */}
+                <div className="flex items-center justify-between px-1">
+                  <div className="flex items-center gap-1.5 text-[12px] font-bold">
+                    {sortOrder === 'created' ? (
+                      <>
+                        <Clock className="w-3.5 h-3.5 shrink-0" style={{ color: accentConfig.hex }} />
+                        <span style={{ color: accentConfig.hex }}>Ngày tạo:</span>
+                        <span className={textPrimary}>{formatTimestamp(booking.createdAt)}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Edit3 className="w-3.5 h-3.5 shrink-0" style={{ color: accentConfig.hex }} />
+                        <span style={{ color: accentConfig.hex }}>Ngày sửa:</span>
+                        <span className={textPrimary}>{formatTimestamp(booking.updatedAt || booking.createdAt)}</span>
+                      </>
+                    )}
+                  </div>
+
+                  <span
+                    className="px-2 py-0.5 rounded-lg text-[11px] font-bold shadow-2xs"
+                    style={{
+                      backgroundColor: isDark
+                        ? 'rgba(255,255,255,0.08)'
+                        : 'rgba(0,0,0,0.06)',
+                      color: textPrimary
+                    }}
+                  >
+                    Hẹn: {cardDate.dayOfWeek} {cardDate.dayMonth}
+                  </span>
                 </div>
+
+                {/* Thẻ chi tiết ca make */}
                 <BookingCard
                   booking={booking}
                   hasConflict={conflicts.length > 0}
                   onSelect={onSelectBooking}
+                  showDate={false}
+                  isPast={isPastDay}
                 />
               </div>
             );
           })
+        ) : (
+          groupedBookings.map((group, groupIdx) => {
+            const isOdd = groupIdx % 2 === 1;
+            const cardDate = formatBookingCardDate(group.date);
+            const isToday = group.date === todayStr;
+            const isPastDay = group.date < todayStr;
+            const isScrollTarget = group.date === targetScrollDate;
+
+            // 2. Phân loại màu sắc thẻ:
+            // Lịch các ngày đã qua: không đổ màu nền như các lịch sắp tới (để transparent), vẫn có viền đầy đủ
+            // Lịch từ hôm nay trở đi: đổ màu nền xen kẽ theo màu chủ đạo
+            const containerBg = isPastDay
+              ? 'transparent'
+              : isOdd
+                ? hexToRgba(accentConfig.hex, 0.30)
+                : hexToRgba(accentConfig.hex, 0.10);
+
+            const containerBorder = isPastDay
+              ? isDark ? '#2C2C2E' : '#E5E5EA'
+              : isOdd
+                ? hexToRgba(accentConfig.hex, 0.40)
+                : hexToRgba(accentConfig.hex, 0.18);
+
+            return (
+              <div
+                key={group.date}
+                id={`day-group-${group.date}`}
+                ref={isScrollTarget ? targetGroupRef : undefined}
+                style={{
+                  backgroundColor: containerBg,
+                  borderColor: containerBorder
+                }}
+                className="p-3 sm:p-3.5 rounded-2xl border transition-all space-y-2.5 shadow-2xs"
+              >
+                {/* Header hiển thị ngày: Thứ (In đậm) Ngày & Tháng (Font chữ thường), Bỏ năm */}
+                <div className="flex items-center justify-between px-1">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[16px] sm:text-[17px] tracking-tight leading-none ${textPrimary}`}>
+                      <strong className="font-bold">{cardDate.dayOfWeek}</strong>{' '}
+                      <span className="font-normal">{cardDate.dayMonth}</span>
+                    </span>
+                    {isToday && (
+                      <span
+                        style={{ backgroundColor: accentConfig.hex }}
+                        className="px-2 py-0.5 rounded-full text-[10.5px] font-extrabold text-white shadow-xs"
+                      >
+                        HÔM NAY
+                      </span>
+                    )}
+                  </div>
+
+                  <span
+                    className="px-2 py-0.5 rounded-lg text-[11px] font-bold shadow-2xs"
+                    style={{
+                      backgroundColor: isDark
+                        ? 'rgba(255,255,255,0.08)'
+                        : 'rgba(0,0,0,0.06)',
+                      color: textPrimary
+                    }}
+                  >
+                    {group.bookings.length} ca
+                  </span>
+                </div>
+
+                {/* Danh sách các ca makeup trong ngày */}
+                <div className="space-y-3.5 sm:space-y-4">
+                  {group.bookings.map((booking) => {
+                    const conflicts = findCTVConflicts(bookings, {
+                      id: booking.id,
+                      date: booking.date,
+                      startTime: booking.startTime,
+                      endTime: booking.endTime,
+                      performerType: booking.performerType,
+                      ctvId: booking.ctvId
+                    });
+
+                    return (
+                      <BookingCard
+                        key={booking.id}
+                        booking={booking}
+                        hasConflict={conflicts.length > 0}
+                        onSelect={onSelectBooking}
+                        showDate={false}
+                        isPast={isPastDay}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })
         )}
-        </div>
+        </motion.div>
       </div>
     </div>
   );

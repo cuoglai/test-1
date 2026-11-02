@@ -1,6 +1,8 @@
 {
-  "name": "Ynii Makeup",
+  "name": "v2 Ynii Makeup",
   "description": "Sổ lịch Makeup thông minh - Quản lý lịch makeup, giờ hẹn và CTV tiện lợi.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

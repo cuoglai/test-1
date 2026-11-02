@@ -3,7 +3,7 @@ import { ActiveTab, CalendarMode, Booking } from './types';
 import { useAppData } from './hooks/useAppData';
 import { CalendarView } from './components/calendar/CalendarView';
 import { BookingListView } from './components/booking/BookingListView';
-import { CTVListView } from './components/ctv/CTVListView';
+import { RevenueView } from './components/revenue/RevenueView';
 import { SettingsView } from './components/settings/SettingsView';
 import { BottomNav } from './components/layout/BottomNav';
 import { BookingDetailModal } from './components/booking/BookingDetailModal';
@@ -15,6 +15,8 @@ function AppContent() {
   const {
     bookings,
     ctvs,
+    firestoreStatus,
+    firestoreError,
     saveBooking,
     deleteBooking,
     updateBookingStatus,
@@ -27,16 +29,22 @@ function AppContent() {
 
   // Navigation & Calendar states
   const [activeTab, setActiveTab] = useState<ActiveTab>('calendar');
-  const [calendarMode, setCalendarMode] = useState<CalendarMode>('day');
+  const [calendarMode, setCalendarMode] = useState<CalendarMode>('month');
+
+  const handleTabChange = (tab: ActiveTab) => {
+    if (tab === 'calendar') {
+      setCalendarMode('month');
+    }
+    setActiveTab(tab);
+  };
 
   // Today's anchor date
   const todayDateStr = useMemo(() => {
     const d = new Date();
     const y = d.getFullYear();
-    if (y === 2026) {
-      return '2026-09-03';
-    }
-    return d.toISOString().split('T')[0];
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
   }, []);
 
   const [currentDate, setCurrentDate] = useState<string>(todayDateStr);
@@ -77,7 +85,7 @@ function AppContent() {
       setSelectedBooking({
         ...selectedBooking,
         status,
-        remainingAmount: status === 'paid' ? 0 : selectedBooking.remainingAmount
+        remainingAmount: status === 'completed' ? 0 : selectedBooking.remainingAmount
       });
     }
   };
@@ -98,97 +106,90 @@ function AppContent() {
 
   return (
     <div
-      className={`flex items-center justify-center min-h-screen w-full font-sans p-0 sm:p-4 transition-colors ${
-        isDark ? 'bg-[#000000]' : 'bg-[#E5E5EA] sm:bg-[#D1D1D6]'
+      id="app-root-container"
+      style={{ minHeight: '-webkit-fill-available' }}
+      className={`w-full h-full flex flex-col overflow-hidden font-sans m-0 p-0 transition-colors ${
+        isDark ? 'bg-[#000000] text-white' : 'bg-white text-[#1C1C1E]'
       }`}
     >
-      {/* iPhone frame container */}
-      <div
-        id="app-device-frame"
-        className={`w-full h-[100dvh] sm:w-[414px] sm:h-[860px] sm:max-h-[96vh] sm:rounded-[44px] sm:shadow-2xl relative flex flex-col sm:border-[9px] overflow-hidden transition-colors ${
-          isDark
-            ? 'bg-[#000000] text-white sm:border-[#2C2C2E]'
-            : 'bg-white text-[#1C1C1E] sm:border-[#1C1C1E]'
-        }`}
-      >
-        {/* iOS Dynamic Island / Speaker notch simulation on Desktop frame */}
-        <div
-          className={`hidden sm:flex justify-center pt-2 pb-1 shrink-0 z-30 transition-colors ${
-            isDark ? 'bg-[#000000]' : 'bg-white'
-          }`}
-        >
-          <div className="w-28 h-4 bg-[#1C1C1E] rounded-full border border-white/10" />
-        </div>
+      {/* Tab View Routing */}
+      <main className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
+        {activeTab === 'calendar' && (
+          <CalendarView
+            currentDate={currentDate}
+            mode={calendarMode}
+            bookings={bookings}
+            todayDateStr={todayDateStr}
+            onDateChange={setCurrentDate}
+            onModeChange={setCalendarMode}
+            onSelectBooking={(b) => setSelectedBooking(b)}
+            onOpenAddBooking={handleOpenAddModal}
+          />
+        )}
 
-        {/* Tab View Routing */}
-        <main className="flex-1 flex flex-col overflow-hidden relative">
-          {activeTab === 'calendar' && (
-            <CalendarView
-              currentDate={currentDate}
-              mode={calendarMode}
-              bookings={bookings}
-              todayDateStr={todayDateStr}
-              onDateChange={setCurrentDate}
-              onModeChange={setCalendarMode}
-              onSelectBooking={(b) => setSelectedBooking(b)}
-              onOpenAddBooking={handleOpenAddModal}
-            />
-          )}
+        {activeTab === 'bookings' && (
+          <BookingListView
+            bookings={bookings}
+            onSelectBooking={(b) => setSelectedBooking(b)}
+            onOpenAddBooking={handleOpenAddModal}
+          />
+        )}
 
-          {activeTab === 'bookings' && (
-            <BookingListView
-              bookings={bookings}
-              onSelectBooking={(b) => setSelectedBooking(b)}
-              onOpenAddBooking={handleOpenAddModal}
-            />
-          )}
+        {activeTab === 'revenue' && (
+          <RevenueView
+            bookings={bookings}
+            ctvs={ctvs}
+            currentDate={currentDate}
+            onSelectBooking={(b) => setSelectedBooking(b)}
+            onOpenAddBooking={handleOpenAddModal}
+          />
+        )}
 
-          {activeTab === 'ctv' && (
-            <CTVListView
-              ctvs={ctvs}
-              bookings={bookings}
-              onSaveCTV={saveCTV}
-              onDeleteCTV={deleteCTV}
-              onSelectBooking={(b) => setSelectedBooking(b)}
-            />
-          )}
+        {activeTab === 'settings' && (
+          <SettingsView
+            onResetDemo={resetDemoData}
+            ctvs={ctvs}
+            bookings={bookings}
+            onSaveCTV={saveCTV}
+            onDeleteCTV={deleteCTV}
+            onSelectBooking={(b) => setSelectedBooking(b)}
+            firestoreStatus={firestoreStatus}
+            firestoreError={firestoreError}
+          />
+        )}
+      </main>
 
-          {activeTab === 'settings' && (
-            <SettingsView onResetDemo={resetDemoData} />
-          )}
-        </main>
+      {/* Bottom Tab Bar with Floating Action Button */}
+      <BottomNav
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+        onOpenAddModal={handleOpenAddModal}
+      />
 
-        {/* Bottom Tab Bar with Floating Action Button */}
-        <BottomNav
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-          onOpenAddModal={handleOpenAddModal}
-        />
+      {/* Booking Detail Modal with inline notes, quick 6-status selector, guest count */}
+      <BookingDetailModal
+        booking={selectedBooking}
+        hasConflict={selectedBookingConflict}
+        onClose={() => setSelectedBooking(null)}
+        onEdit={handleEditBooking}
+        onDelete={handleDeleteBooking}
+        onMarkStatus={handleStatusChange}
+        onSaveBooking={handleSaveBooking}
+      />
 
-        {/* Booking Detail Modal */}
-        <BookingDetailModal
-          booking={selectedBooking}
-          hasConflict={selectedBookingConflict}
-          onClose={() => setSelectedBooking(null)}
-          onEdit={handleEditBooking}
-          onDelete={handleDeleteBooking}
-          onMarkStatus={handleStatusChange}
-        />
-
-        {/* Booking Add / Edit Form Modal */}
-        <BookingFormModal
-          isOpen={isFormModalOpen}
-          initialDate={currentDate}
-          editBooking={bookingToEdit}
-          ctvs={ctvs}
-          allBookings={bookings}
-          onClose={() => {
-            setIsFormModalOpen(false);
-            setBookingToEdit(null);
-          }}
-          onSave={handleSaveBooking}
-        />
-      </div>
+      {/* Booking Add / Edit Form Modal with mandatory CTV selection, guest count stepper, 6 statuses */}
+      <BookingFormModal
+        isOpen={isFormModalOpen}
+        initialDate={currentDate}
+        editBooking={bookingToEdit}
+        ctvs={ctvs}
+        allBookings={bookings}
+        onClose={() => {
+          setIsFormModalOpen(false);
+          setBookingToEdit(null);
+        }}
+        onSave={handleSaveBooking}
+      />
     </div>
   );
 }

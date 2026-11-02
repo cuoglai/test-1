@@ -1,4 +1,5 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
+import { motion } from 'motion/react';
 import { Booking } from '../../types';
 import { parseDateString, formatDateString } from '../../utils/formatters';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -7,17 +8,103 @@ interface MonthViewProps {
   currentDate: string;
   allBookings: Booking[];
   onSelectDay: (dateStr: string) => void;
+  onMonthChange?: (dateStr: string) => void;
 }
 
 export const MonthView: React.FC<MonthViewProps> = ({
   currentDate,
   allBookings,
-  onSelectDay
+  onSelectDay,
+  onMonthChange
 }) => {
   const { isDark, accentConfig } = useTheme();
   const current = parseDateString(currentDate);
   const year = current.getFullYear();
   const month = current.getMonth(); // 0-indexed
+
+  // Hướng chuyển động: 1 (sang phải -> tháng sau), -1 (sang trái -> tháng trước)
+  const [direction, setDirection] = useState<number>(0);
+  const prevDateRef = useRef(currentDate);
+
+  useEffect(() => {
+    if (currentDate > prevDateRef.current) {
+      setDirection(1);
+    } else if (currentDate < prevDateRef.current) {
+      setDirection(-1);
+    }
+    prevDateRef.current = currentDate;
+  }, [currentDate]);
+
+  const goToNextMonth = () => {
+    setDirection(1);
+    const targetDay = Math.min(current.getDate(), new Date(year, month + 2, 0).getDate());
+    const nextMonth = new Date(year, month + 1, targetDay);
+    onMonthChange?.(formatDateString(nextMonth));
+  };
+
+  const goToPrevMonth = () => {
+    setDirection(-1);
+    const targetDay = Math.min(current.getDate(), new Date(year, month, 0).getDate());
+    const prevMonth = new Date(year, month - 1, targetDay);
+    onMonthChange?.(formatDateString(prevMonth));
+  };
+
+  // Xử lý vuốt ngang để chuyển đổi giữa các tháng trước và sau
+  const touchStartX = useRef<number | null>(null);
+  const touchStartY = useRef<number | null>(null);
+  const touchStartTime = useRef<number>(0);
+  const mouseStartX = useRef<number | null>(null);
+  const mouseStartY = useRef<number | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+    touchStartTime.current = Date.now();
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current === null || touchStartY.current === null) return;
+    const deltaX = e.changedTouches[0].clientX - touchStartX.current;
+    const deltaY = e.changedTouches[0].clientY - touchStartY.current;
+    const deltaTime = Date.now() - touchStartTime.current;
+    touchStartX.current = null;
+    touchStartY.current = null;
+
+    const isHorizontal = Math.abs(deltaX) > Math.abs(deltaY) * 1.2;
+    const isSufficient = Math.abs(deltaX) >= 40 || (Math.abs(deltaX) >= 25 && deltaTime < 300);
+
+    if (isHorizontal && isSufficient) {
+      if (deltaX < 0) {
+        // Vuốt sang trái -> Tháng sau
+        goToNextMonth();
+      } else {
+        // Vuốt sang phải -> Tháng trước
+        goToPrevMonth();
+      }
+    }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    mouseStartX.current = e.clientX;
+    mouseStartY.current = e.clientY;
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    if (mouseStartX.current === null || mouseStartY.current === null) return;
+    const deltaX = e.clientX - mouseStartX.current;
+    const deltaY = e.clientY - mouseStartY.current;
+    mouseStartX.current = null;
+    mouseStartY.current = null;
+
+    if (Math.abs(deltaX) >= 45 && Math.abs(deltaX) > Math.abs(deltaY) * 1.2) {
+      if (deltaX < 0) {
+        goToNextMonth();
+      } else {
+        goToPrevMonth();
+      }
+    }
+  };
 
   // Generate calendar days for the current month view
   const calendarGrid = useMemo(() => {
@@ -88,9 +175,30 @@ export const MonthView: React.FC<MonthViewProps> = ({
   const normalCellBg = isDark ? 'bg-[#2C2C2E] border-[#38383A] hover:bg-[#38383A]' : 'bg-[#F9F9F9] border-[#E5E5EA]/60 hover:bg-[#F2F2F7]';
 
   return (
-    <div id="month-view-container" className="flex-1 overflow-y-auto p-4 flex flex-col">
-      {/* Month calendar card */}
-      <div className={`${cardBg} rounded-2xl border p-3 sm:p-4 shadow-xs`}>
+    <div
+      id="month-view-container"
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      onMouseDown={handleMouseDown}
+      onMouseUp={handleMouseUp}
+      className="flex-1 overflow-y-auto ios-scrollable p-4 flex flex-col select-none cursor-grab active:cursor-grabbing"
+      style={{
+        paddingLeft: 'max(env(safe-area-inset-left, 0px), 16px)',
+        paddingRight: 'max(env(safe-area-inset-right, 0px), 16px)',
+        paddingBottom: 'calc(max(env(safe-area-inset-bottom, 0px), 12px) + 64px)'
+      }}
+    >
+      {/* Month calendar card with smooth slide animation */}
+      <motion.div
+        key={`${year}-${month}`}
+        initial={{ x: direction > 0 ? 36 : direction < 0 ? -36 : 0, opacity: 0.85 }}
+        animate={{ x: 0, opacity: 1 }}
+        transition={{
+          x: { type: 'spring', stiffness: 500, damping: 38, mass: 0.8 },
+          opacity: { duration: 0.12, ease: 'easeOut' }
+        }}
+        className={`${cardBg} rounded-2xl border p-3 sm:p-4 shadow-xs`}
+      >
         {/* Days of week header */}
         <div className="grid grid-cols-7 gap-1 text-center mb-2">
           {weekHeaders.map((header) => (
@@ -165,7 +273,7 @@ export const MonthView: React.FC<MonthViewProps> = ({
             );
           })}
         </div>
-      </div>
+      </motion.div>
 
       <p className={`text-center text-[12px] ${textSecondary} mt-3`}>
         Chạm vào ngày bất kỳ để xem danh sách lịch chi tiết của ngày đó.

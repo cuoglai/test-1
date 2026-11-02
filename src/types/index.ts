@@ -1,16 +1,22 @@
-export type BookingStatus = 'deposited' | 'assigned' | 'completed' | 'paid' | 'cancelled';
+export type BookingStatus = 
+  | 'deposited'    // Đã cọc
+  | 'finding_ctv'  // Đang tìm CTV
+  | 'assigned'     // Đã giao CTV
+  | 'rescheduled'  // Dời lịch
+  | 'cancelled'    // Hủy
+  | 'completed';   // Hoàn thành
 
-export type PerformerType = 'owner' | 'ctv';
+export type PerformerType = 'ctv';
 
 export type ReminderOption = 'none' | '15_mins' | '30_mins' | '1_hour' | '2_hours' | '3_hours' | '1_day';
 
 export type CalendarMode = 'day' | 'week' | 'month';
 
-export type ActiveTab = 'calendar' | 'bookings' | 'ctv' | 'settings';
+export type ActiveTab = 'calendar' | 'bookings' | 'revenue' | 'settings';
 
 export type ThemeMode = 'light' | 'dark';
 
-export type AccentColor = 'blue' | 'purple' | 'pink' | 'orange' | 'green';
+export type AccentColor = 'blue' | 'purple' | 'pink' | 'orange' | 'green' | 'custom';
 
 export interface Customer {
   id: string;
@@ -35,6 +41,7 @@ export interface CTV {
   phone: string;
   note?: string;
   active: boolean;
+  color?: string;
 }
 
 export interface Booking {
@@ -47,6 +54,7 @@ export interface Booking {
   startTime: string; // HH:mm
   endTime: string; // HH:mm
   quantity: number;
+  guestCount?: number; // Số lượng khách
   
   // Verbatim makeup info (full note containing customer, service, financial info)
   makeupInfo?: string;
@@ -57,19 +65,20 @@ export interface Booking {
   packagePrice: number;
   
   // Financials
+  price?: number;
   deposit: number;
   surcharge: number;
   totalAmount: number;
   remainingAmount: number;
   
-  // Performer
-  performerType: PerformerType;
-  ctvId?: string;
+  // Performer: 100% CTV
+  performerType?: PerformerType | string;
+  ctvId: string;
   ctvNameSnapshot?: string;
   
   // Note & status
   note: string;
-  reminder: ReminderOption;
+  reminder?: ReminderOption;
   status: BookingStatus;
   
   createdAt: number;
