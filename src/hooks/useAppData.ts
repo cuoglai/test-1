@@ -101,10 +101,26 @@ export function useAppData() {
   // Tuyệt đối KHÔNG gom cả danh sách mảng để ghi đè toàn bộ collection.
   const handleSaveBooking = useCallback(async (booking: Booking) => {
     const now = Date.now();
+    // Tự động tính giá ca makeup: 1 khách = 100k, 2 khách = 200k, 3 khách = 300k...
+    // để đồng bộ lên cơ sở dữ liệu cho app chính thống kê doanh thu
+    const resolvedGuestCount = Math.max(1, getBookingGuestCount(booking));
+    const autoPrice = resolvedGuestCount * 100000;
+    const deposit = typeof booking.deposit === 'number' ? booking.deposit : 0;
+    const surcharge = typeof booking.surcharge === 'number' ? booking.surcharge : 0;
+    const totalAmount = autoPrice + surcharge;
+    const remainingAmount = booking.status === 'completed' ? 0 : Math.max(0, totalAmount - deposit);
+
     const normalizedBooking: Booking = {
       ...booking,
       performerType: 'ctv',
-      guestCount: booking.guestCount ? booking.guestCount : getBookingGuestCount(booking),
+      guestCount: resolvedGuestCount,
+      quantity: resolvedGuestCount,
+      price: autoPrice,
+      packagePrice: autoPrice,
+      deposit,
+      surcharge,
+      totalAmount,
+      remainingAmount,
       createdAt: booking.createdAt || now,
       updatedAt: now
     };

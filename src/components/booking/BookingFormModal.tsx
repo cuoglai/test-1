@@ -382,6 +382,15 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
     const customerPhone = parsedTemplate.phone || extractVietnamesePhoneNumber(trimmedInfo) || editBooking?.customerPhone || '';
     const customerAddress = parsedTemplate.address || editBooking?.customerAddress || '';
 
+    const resolvedGuestCount = Math.max(1, guestCount || 1);
+    // Tự động tính giá ca makeup: 1 khách = 100k, 2 khách = 200k, 3 khách = 300k...
+    // Chỉ lưu vào cơ sở dữ liệu đồng bộ với app chính, không hiển thị trong giao diện sale app
+    const computedPrice = resolvedGuestCount * 100000;
+    const deposit = editBooking?.deposit || 0;
+    const surcharge = editBooking?.surcharge || 0;
+    const totalAmount = computedPrice + surcharge;
+    const remainingAmount = status === 'completed' ? 0 : Math.max(0, totalAmount - deposit);
+
     const bookingData: Booking = {
       id: editBooking?.id || 'b-' + Date.now().toString(36),
       customerId: editBooking?.customerId,
@@ -394,17 +403,17 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
       customerName: resolvedCustomerName,
       customerPhone,
       customerAddress,
-      quantity: guestCount,
-      guestCount,
+      quantity: resolvedGuestCount,
+      guestCount: resolvedGuestCount,
 
       packageId: editBooking?.packageId || '',
       packageNameSnapshot: editBooking?.packageNameSnapshot || 'Makeup',
-      price: 0,
-      packagePrice: 0,
-      deposit: 0,
-      surcharge: 0,
-      totalAmount: 0,
-      remainingAmount: 0,
+      price: computedPrice,
+      packagePrice: computedPrice,
+      deposit,
+      surcharge,
+      totalAmount,
+      remainingAmount,
 
       performerType: 'ctv',
       ctvId: ctvId || selectedCTV?.id || '',

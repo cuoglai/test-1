@@ -73,13 +73,39 @@ export function saveBooking(booking: Booking): Booking {
   const list = getBookings();
   const existingIdx = list.findIndex(b => b.id === booking.id);
   const now = Date.now();
+  const guestCount = Math.max(
+    1,
+    typeof booking.guestCount === 'number' && booking.guestCount > 0
+      ? booking.guestCount
+      : (typeof booking.quantity === 'number' && booking.quantity > 0 ? booking.quantity : 1)
+  );
+  // Tự động tính giá ca makeup: 1 khách = 100k, 2 khách = 200k, 3 khách = 300k...
+  // Lưu vào cơ sở dữ liệu để đồng bộ với app chính
+  const autoPrice = guestCount * 100000;
+  const deposit = typeof booking.deposit === 'number' ? booking.deposit : 0;
+  const surcharge = typeof booking.surcharge === 'number' ? booking.surcharge : 0;
+  const totalAmount = autoPrice + surcharge;
+  const remainingAmount = booking.status === 'completed' ? 0 : Math.max(0, totalAmount - deposit);
+
+  const normalized: Booking = {
+    ...booking,
+    performerType: 'ctv',
+    guestCount,
+    quantity: guestCount,
+    price: autoPrice,
+    packagePrice: autoPrice,
+    deposit,
+    surcharge,
+    totalAmount,
+    remainingAmount
+  };
 
   let updated: Booking;
   if (existingIdx >= 0) {
-    updated = { ...booking, updatedAt: now };
+    updated = { ...normalized, updatedAt: now };
     list[existingIdx] = updated;
   } else {
-    updated = { ...booking, createdAt: booking.createdAt || now, updatedAt: now };
+    updated = { ...normalized, createdAt: booking.createdAt || now, updatedAt: now };
     list.push(updated);
   }
 
@@ -87,7 +113,7 @@ export function saveBooking(booking: Booking): Booking {
 
   // Also auto-sync/upsert customer
   if (booking.customerPhone && booking.customerName) {
-    upsertCustomerFromBooking(booking);
+    upsertCustomerFromBooking(updated);
   }
 
   return updated;
@@ -103,9 +129,15 @@ export function updateBookingStatus(id: string, status: BookingStatus): void {
   const target = list.find(b => b.id === id);
   if (target) {
     target.status = status;
+    const guestCount = Math.max(1, target.guestCount || target.quantity || 1);
+    const autoPrice = guestCount * 100000;
+    if (!target.price || target.price === 0) {
+      target.price = autoPrice;
+      target.packagePrice = autoPrice;
+      target.totalAmount = autoPrice;
+    }
     // If marked completed, adjust remaining amount
-    if (status === 'completed' && target.remainingAmount > 0) {
-      target.deposit = target.totalAmount;
+    if (status === 'completed') {
       target.remainingAmount = 0;
     }
     target.updatedAt = Date.now();

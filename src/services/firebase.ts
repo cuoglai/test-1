@@ -47,6 +47,13 @@ export function sanitizeForFirestore<T extends Record<string, any>>(obj: T): Rec
 
 // Helper: chuyển đổi doc Firestore sang đối tượng Booking chuẩn
 export function docToBooking(id: string, data: Record<string, any>): Booking {
+  const rawGuest = typeof data.guestCount === 'number' && data.guestCount > 0
+    ? data.guestCount
+    : (typeof data.quantity === 'number' && data.quantity > 0 ? data.quantity : 1);
+  const autoPrice = rawGuest * 100000;
+  const price = typeof data.price === 'number' && data.price > 0 ? data.price : autoPrice;
+  const totalAmount = typeof data.totalAmount === 'number' && data.totalAmount > 0 ? data.totalAmount : price;
+
   return {
     id: id || data.id,
     customerId: data.customerId || undefined,
@@ -56,16 +63,17 @@ export function docToBooking(id: string, data: Record<string, any>): Booking {
     date: data.date || '',
     startTime: data.startTime || '08:00',
     endTime: data.endTime || '',
-    quantity: typeof data.quantity === 'number' ? data.quantity : 1,
+    quantity: rawGuest,
+    guestCount: rawGuest,
     makeupInfo: data.makeupInfo || '',
     packageId: data.packageId || undefined,
     packageNameSnapshot: data.packageNameSnapshot || data.serviceType || 'Gói Makeup',
-    packagePrice: typeof data.packagePrice === 'number' ? data.packagePrice : (typeof data.totalAmount === 'number' ? data.totalAmount : 0),
-    price: typeof data.price === 'number' ? data.price : (typeof data.totalAmount === 'number' ? data.totalAmount : 350000),
+    packagePrice: typeof data.packagePrice === 'number' && data.packagePrice > 0 ? data.packagePrice : price,
+    price: price,
     deposit: typeof data.deposit === 'number' ? data.deposit : 0,
     surcharge: typeof data.surcharge === 'number' ? data.surcharge : 0,
-    totalAmount: typeof data.totalAmount === 'number' ? data.totalAmount : 0,
-    remainingAmount: typeof data.remainingAmount === 'number' ? data.remainingAmount : 0,
+    totalAmount: totalAmount,
+    remainingAmount: typeof data.remainingAmount === 'number' ? data.remainingAmount : (data.status === 'completed' ? 0 : totalAmount),
     performerType: data.performerType === 'ctv' ? 'ctv' : 'owner',
     ctvId: data.ctvId || undefined,
     ctvNameSnapshot: data.ctvNameSnapshot || data.ctvName || undefined,
@@ -173,6 +181,23 @@ export async function saveBookingToFirestore(booking: Booking): Promise<void> {
   try {
     const bookingRef = doc(db, BOOKINGS_COLLECTION, booking.id);
     const now = Date.now();
+    const guestCount = Math.max(
+      1,
+      typeof booking.guestCount === 'number' && booking.guestCount > 0
+        ? booking.guestCount
+        : (typeof booking.quantity === 'number' && booking.quantity > 0 ? booking.quantity : 1)
+    );
+    // Tự động để giá ca makeup là 100k cho mỗi 1 khách (1 khách = 100k, 2 khách = 200k, 3 khách = 300k...)
+    // Đồng bộ lên Firestore để app chính thống kê doanh thu dễ dàng
+    const autoPrice = guestCount * 100000;
+    const price = typeof booking.price === 'number' && booking.price > 0 ? booking.price : autoPrice;
+    const deposit = typeof booking.deposit === 'number' ? booking.deposit : 0;
+    const surcharge = typeof booking.surcharge === 'number' ? booking.surcharge : 0;
+    const totalAmount = typeof booking.totalAmount === 'number' && booking.totalAmount > 0 ? booking.totalAmount : (price + surcharge);
+    const remainingAmount = booking.status === 'completed'
+      ? 0
+      : (typeof booking.remainingAmount === 'number' ? booking.remainingAmount : Math.max(0, totalAmount - deposit));
+
     const rawPayload: Record<string, any> = {
       id: booking.id,
       customerName: booking.customerName || 'Khách make',
@@ -181,16 +206,17 @@ export async function saveBookingToFirestore(booking: Booking): Promise<void> {
       date: booking.date || '',
       startTime: booking.startTime || '08:00',
       endTime: booking.endTime || '',
-      quantity: typeof booking.quantity === 'number' ? booking.quantity : 1,
+      quantity: guestCount,
+      guestCount: guestCount,
       makeupInfo: booking.makeupInfo || '',
       packageNameSnapshot: booking.packageNameSnapshot || 'Gói Makeup',
-      packagePrice: typeof booking.packagePrice === 'number' ? booking.packagePrice : 0,
-      price: typeof booking.price === 'number' ? booking.price : (booking.totalAmount || 0),
-      deposit: typeof booking.deposit === 'number' ? booking.deposit : 0,
-      surcharge: typeof booking.surcharge === 'number' ? booking.surcharge : 0,
-      totalAmount: typeof booking.totalAmount === 'number' ? booking.totalAmount : 0,
-      remainingAmount: typeof booking.remainingAmount === 'number' ? booking.remainingAmount : 0,
-      performerType: booking.performerType === 'ctv' ? 'ctv' : 'owner',
+      packagePrice: price,
+      price: price,
+      deposit: deposit,
+      surcharge: surcharge,
+      totalAmount: totalAmount,
+      remainingAmount: remainingAmount,
+      performerType: 'ctv',
       note: booking.note || '',
       reminder: booking.reminder || '30_mins',
       status: booking.status || 'deposited',
